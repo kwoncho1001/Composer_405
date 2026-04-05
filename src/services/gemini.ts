@@ -4,6 +4,102 @@ import { withTimeout } from "../lib/utils";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MODEL = "gemini-3.1-flash-lite-preview";
+const PRO_MODEL = "gemini-3.1-pro-preview";
+
+// Phase 0: Market-Fit Validator (초기 뼈대 자동 생성)
+export const generateInitialBlueprint = async (businessIdea: string) => {
+  const prompt = `당신은 세계 최고의 비즈니스 아키텍트이자 AI 코파운더입니다.
+사용자가 제시한 비즈니스 아이디어를 분석하여, MVP(최소 기능 제품) 런칭을 위한 최적의 시스템 구조(Domain, Module, Logic)를 설계하세요.
+
+[비즈니스 아이디어]
+${businessIdea}
+
+[설계 규칙]
+1. Domain: 비즈니스의 최상위 개념 (예: '사용자 계정 시스템', '커머스 결제 시스템')
+2. Module: 도메인을 구성하는 기능적 그룹 (예: '소셜 로그인', '장바구니')
+3. Logic: 사용자가 체감하는 실제 서비스 단위 (예: '중복 아이디 가입 방지')
+4. MVP 스코핑: 당장 첫 달에 필수적인 기능(Must-have)만 포함하세요. (Nice-to-have는 제외)
+5. 각 노드는 title, summary, type('Domain', 'Module', 'Logic')을 가져야 합니다.
+6. 계층 구조를 명확히 하기 위해, Domain 안에 Module 배열이 있고, Module 안에 Logic 배열이 있는 중첩된 JSON 구조로 반환하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "domains": [
+    {
+      "title": "도메인 제목",
+      "summary": "도메인 요약",
+      "modules": [
+        {
+          "title": "모듈 제목",
+          "summary": "모듈 요약",
+          "logics": [
+            {
+              "title": "로직 제목",
+              "summary": "로직 요약"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          domains: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                modules: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING },
+                      summary: { type: Type.STRING },
+                      logics: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            title: { type: Type.STRING },
+                            summary: { type: Type.STRING }
+                          },
+                          required: ["title", "summary"]
+                        }
+                      }
+                    },
+                    required: ["title", "summary", "logics"]
+                  }
+                }
+              },
+              required: ["title", "summary", "modules"]
+            }
+          }
+        },
+        required: ["domains"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "{}" } as any);
+
+  try {
+    return JSON.parse(response.text || "{}");
+  } catch (e) {
+    console.error("Failed to generate blueprint", e);
+    return { domains: [] };
+  }
+};
 
 // Phase 1: 로직 단위 추출
 export const extractLogicUnits = async (filePath: string, fileContent: string) => {
@@ -540,4 +636,453 @@ ${fileContent}
   const response = await withTimeout(responsePromise, 45000, { text: "가이드를 생성하지 못했습니다." } as any);
 
   return response.text || "가이드를 생성하지 못했습니다.";
+};
+
+// Phase 4: Dynamic MVP Scoping
+// Phase 5: AI C-Suite Evaluation
+export const evaluateWithCSuite = async (noteTitle: string, noteSummary: string, noteType: string) => {
+  const prompt = `당신은 혁신적인 기술 스타트업의 가상 임원진(AI C-Suite: CTO, CMO, CFO)입니다.
+다음 기획안(${noteType})을 각자의 전문 분야 관점에서 날카롭고 현실적으로 평가하세요.
+
+[기획안]
+제목: ${noteTitle}
+요약: ${noteSummary}
+
+[평가 지침]
+- CTO (최고 기술 책임자): 기술적 실현 가능성, 확장성, 아키텍처, 기술 부채, 서버 부하 등을 평가합니다.
+- CMO (최고 마케팅 책임자): 유저 획득(Acquisition), 리텐션, 바이럴 루프, UX, 시장 매력도 등을 평가합니다.
+- CFO (최고 재무 책임자): 개발 비용, 유지보수 비용(Burn Rate), 예상 ROI, 수익성 등을 평가합니다.
+- Consensus (최종 결의안): 세 임원의 의견을 종합한 1문장짜리 최종 권고안 (예: "P1으로 즉시 진행", "비용 문제로 보류", "UX 개선 후 재검토" 등).
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "cto": "CTO의 평가 (2~3문장)",
+  "cmo": "CMO의 평가 (2~3문장)",
+  "cfo": "CFO의 평가 (2~3문장)",
+  "consensus": "최종 결의안 (1문장)"
+}
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          cto: { type: Type.STRING },
+          cmo: { type: Type.STRING },
+          cfo: { type: Type.STRING },
+          consensus: { type: Type.STRING }
+        },
+        required: ["cto", "cmo", "cfo", "consensus"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "{}" } as any);
+  if (!response || !response.text) {
+    throw new Error("Failed to generate C-Suite evaluation.");
+  }
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr) as { cto: string, cmo: string, cfo: string, consensus: string };
+  } catch (e) {
+    console.error("Failed to parse C-Suite JSON", e);
+    throw new Error("Invalid JSON format from AI.");
+  }
+};
+
+export const scopeMVP = async (notes: Note[], constraint: string) => {
+  const prompt = `당신은 세계 최고의 프로덕트 매니저이자 비즈니스 전략가입니다.
+사용자가 제시한 제약 조건(예: "이번 주말까지 런칭", "핵심 결제만 집중")에 맞춰, 현재 기획된 시스템(Module, Logic)들의 우선순위를 재조정(MVP Scoping)하세요.
+
+[사용자 제약 조건]
+${constraint}
+
+[현재 기획된 시스템 목록]
+${notes.map(n => `ID: ${n.id} | Type: ${n.noteType} | Title: ${n.title} | Summary: ${n.summary}`).join('\n')}
+
+[우선순위 분류 기준]
+- P1 (Must-have): 제약 조건을 맞추기 위해 절대적으로 필수적인 핵심 기능. 없으면 서비스가 성립하지 않음.
+- P2 (Nice-to-have): 있으면 좋지만, 당장 런칭에는 제외해도 되는 기능.
+- P3 (Backlog): 나중에 여유가 될 때 개발할 기능.
+
+각 ID에 대해 새로운 우선순위(P1, P2, P3)와 그 이유(1문장)를 JSON 배열로 반환하세요.
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "scoping": [
+    {
+      "id": "노트 ID",
+      "priority": "P1",
+      "reason": "우선순위를 이렇게 설정한 이유 (비즈니스 관점)"
+    }
+  ]
+}
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          scoping: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                priority: { type: Type.STRING },
+                reason: { type: Type.STRING }
+              },
+              required: ["id", "priority", "reason"]
+            }
+          }
+        },
+        required: ["scoping"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "[]" } as any);
+  if (!response || !response.text) {
+    throw new Error("Failed to generate MVP scoping.");
+  }
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr).scoping as { id: string, priority: 'P1' | 'P2' | 'P3', reason: string }[];
+  } catch (e) {
+    console.error("Failed to parse MVP scoping JSON", e);
+    throw new Error("Invalid JSON format from AI.");
+  }
+};
+
+// Phase 6: Code-to-Cost (Burn Rate Estimator)
+export const estimateProjectCost = async (notes: Note[]) => {
+  const prompt = `당신은 세계 최고의 클라우드 아키텍트이자 재무 책임자(CFO)입니다.
+현재 기획된 시스템(특히 P1, P2 우선순위의 Module, Logic)을 분석하여, 이 MVP를 런칭하고 초기 1개월간 운영할 때 예상되는 인프라 및 API 비용(Burn Rate)을 추정하세요.
+
+[현재 기획된 시스템 목록]
+${notes.map(n => `Type: ${n.noteType} | Priority: ${n.priority} | Title: ${n.title} | Summary: ${n.summary}`).join('\n')}
+
+[비용 추정 지침]
+- AWS, Firebase, Vercel, OpenAI 등 실제 널리 쓰이는 서비스의 요금제를 기준으로 현실적으로 추정하세요.
+- 초기 스타트업의 MVP 수준(월간 활성 사용자 1,000~5,000명 가정)으로 계산하세요.
+- 각 항목별로 구체적인 예상 금액(원화 ₩ 또는 달러 $)과 그 이유를 짧게 명시하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "totalMonthlyCost": "총 예상 월간 비용 (예: ₩150,000 / 월)",
+  "infrastructure": "서버, DB, 호스팅 비용 내역 및 이유 (2~3문장)",
+  "thirdPartyApis": "AI, 결제, 알림 등 외부 API 비용 내역 및 이유 (2~3문장)",
+  "maintenance": "유지보수, 백업, 기타 숨겨진 비용 (1~2문장)",
+  "summary": "비용 최적화를 위한 CFO의 한 줄 조언"
+}
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          totalMonthlyCost: { type: Type.STRING },
+          infrastructure: { type: Type.STRING },
+          thirdPartyApis: { type: Type.STRING },
+          maintenance: { type: Type.STRING },
+          summary: { type: Type.STRING }
+        },
+        required: ["totalMonthlyCost", "infrastructure", "thirdPartyApis", "maintenance", "summary"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "{}" } as any);
+  if (!response || !response.text) {
+    throw new Error("Failed to generate cost estimate.");
+  }
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr) as { totalMonthlyCost: string, infrastructure: string, thirdPartyApis: string, maintenance: string, summary: string };
+  } catch (e) {
+    console.error("Failed to parse Cost Estimate JSON", e);
+    throw new Error("Invalid JSON format from AI.");
+  }
+};
+
+// Phase 7: PR/FAQ & Pitch Deck Generator (Amazon Working Backwards)
+export const generatePitchDeck = async (notes: Note[]) => {
+  const prompt = `당신은 실리콘밸리의 탑티어 벤처캐피탈(VC) 파트너이자, 아마존(Amazon)의 신제품 기획자입니다.
+현재 기획된 시스템(Domain, Module, Logic)을 분석하여, 코드를 짜기 전에 제품의 시장 가치를 증명하는 '보도자료(PR)'와 '투자자용 피치덱(Pitch Deck)'을 작성하세요. (아마존의 Working Backwards 방법론 적용)
+
+[현재 기획된 시스템 목록]
+${notes.map(n => `Type: ${n.noteType} | Priority: ${n.priority} | Title: ${n.title} | Summary: ${n.summary}`).join('\n')}
+
+[작성 지침]
+- pressRelease: 앱스토어 런칭 첫날 배포할 가상의 보도자료 (고객의 문제를 어떻게 극적으로 해결했는지 강조, 마크다운 포맷)
+- elevatorPitch: 투자자에게 30초 안에 설명할 수 있는 강력한 한 줄 소개와 핵심 가치 (2~3문장)
+- problemAndSolution: 시장의 기존 문제점(Problem)과 이 프로덕트가 제시하는 혁신적인 해결책(Solution)
+- targetAudience: 핵심 타겟 고객 페르소나와 그들이 이 제품에 열광할 수밖에 없는 이유
+- businessModel: 어떻게 돈을 벌 것인가? (구독, 수수료, 광고 등) 수익화 전략
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "pressRelease": "보도자료 내용 (마크다운)",
+  "elevatorPitch": "엘리베이터 피치",
+  "problemAndSolution": "문제와 해결책",
+  "targetAudience": "타겟 고객",
+  "businessModel": "비즈니스 모델"
+}
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          pressRelease: { type: Type.STRING },
+          elevatorPitch: { type: Type.STRING },
+          problemAndSolution: { type: Type.STRING },
+          targetAudience: { type: Type.STRING },
+          businessModel: { type: Type.STRING }
+        },
+        required: ["pressRelease", "elevatorPitch", "problemAndSolution", "targetAudience", "businessModel"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "{}" } as any);
+  if (!response || !response.text) {
+    throw new Error("Failed to generate Pitch Deck.");
+  }
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr) as { pressRelease: string, elevatorPitch: string, problemAndSolution: string, targetAudience: string, businessModel: string };
+  } catch (e) {
+    console.error("Failed to parse Pitch Deck JSON", e);
+    throw new Error("Invalid JSON format from AI.");
+  }
+};
+
+// Phase 8: Competitor Teardown (경쟁사 역설계 및 블루오션 탐색기)
+export const analyzeCompetitor = async (competitorName: string, notes: Note[]) => {
+  const prompt = `당신은 세계 최고의 프로덕트 전략가이자 리버스 엔지니어링 전문가입니다.
+사용자가 입력한 경쟁사('${competitorName}')를 분석하고, 현재 기획 중인 우리 시스템과 비교하여 '블루오션 전략'을 도출하세요.
+
+[우리 시스템 기획 상태]
+${notes.map(n => `Type: ${n.noteType} | Title: ${n.title} | Summary: ${n.summary}`).join('\n')}
+
+[분석 지침]
+- coreMechanics: 해당 경쟁사의 핵심 성공 요인과 동작 원리 (2~3문장)
+- weaknesses: 경쟁사의 치명적인 약점이나 고객들이 불편해하는 지점 (2~3문장)
+- blueOceanStrategy: 경쟁사의 약점을 파고들어 우리 시스템이 취해야 할 '블루오션' 포지셔닝 (2~3문장)
+- actionableLogics: 우리 시스템에 즉시 추가해야 할 차별화된 핵심 로직(기능) 아이디어 3가지 (배열 형식)
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "coreMechanics": "경쟁사 핵심 원리",
+  "weaknesses": "경쟁사 약점",
+  "blueOceanStrategy": "우리의 블루오션 전략",
+  "actionableLogics": ["차별화 로직 1", "차별화 로직 2", "차별화 로직 3"]
+}
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          coreMechanics: { type: Type.STRING },
+          weaknesses: { type: Type.STRING },
+          blueOceanStrategy: { type: Type.STRING },
+          actionableLogics: { 
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          }
+        },
+        required: ["coreMechanics", "weaknesses", "blueOceanStrategy", "actionableLogics"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "{}" } as any);
+  if (!response || !response.text) {
+    throw new Error("Failed to analyze competitor.");
+  }
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr) as { coreMechanics: string, weaknesses: string, blueOceanStrategy: string, actionableLogics: string[] };
+  } catch (e) {
+    console.error("Failed to parse Competitor Analysis JSON", e);
+    throw new Error("Invalid JSON format from AI.");
+  }
+};
+
+// Phase 9: Proactive AI Co-founder (Continuous Ideation)
+export const generateProactiveNudges = async (notes: Note[]) => {
+  const prompt = `당신은 코딩을 전혀 모르는 비전공자 창업가(CEO)와 함께 일하는 '비즈니스/프로덕트 전문 AI 코파운더'입니다. 
+모토는 "Ideas don't come fully formed." 입니다.
+현재 기획된 시스템을 분석하여, 비즈니스 가치(매출, 유저 확보, 리텐션, 바이럴 등)를 극대화할 수 있는 기발한 프로덕트 아이디어 3가지를 제안하세요.
+
+[🚨 절대 금지 사항 - 매우 중요]
+- 개발자 용어(AST, CI/CD, PR, 리팩토링, 코드 스멜, 파이어베이스, 동기화, 아키텍처 등)를 절대 사용하지 마세요.
+- 철저하게 '고객이 느끼는 가치(UX)'와 '돈을 버는 방법(BM)' 관점에서만 이야기하세요.
+- 중학생도 이해할 수 있는 아주 쉽고 매력적인 일상어로 설명하세요.
+
+[현재 시스템]
+${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "nudges": [
+    {
+      "id": "고유문자열",
+      "context": "현재 서비스의 비즈니스적 상황 (예: 현재는 사용자가 상품을 단건으로만 구매하고 이탈하기 쉬운 구조네요.)",
+      "question": "영감을 주는 매력적인 질문 (예: 단골 손님을 꽉 잡기 위해, 매월 알아서 결제되는 'VIP 정기 구독' 모델을 도입해 보는 건 어떨까요?)",
+      "keywords": ["구독 모델", "단골 확보", "VIP 혜택"],
+      "actionPrompt": "이 아이디어를 시스템에 추가하기 위한 프롬프트 (예: VIP 정기 구독 결제 및 혜택 관리 로직 추가)"
+    }
+  ]
+}
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          nudges: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                context: { type: Type.STRING },
+                question: { type: Type.STRING },
+                keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+                actionPrompt: { type: Type.STRING }
+              },
+              required: ["id", "context", "question", "keywords", "actionPrompt"]
+            }
+          }
+        },
+        required: ["nudges"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "[]" } as any);
+  if (!response || !response.text) {
+    throw new Error("Failed to generate nudges.");
+  }
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr).nudges as { id: string, context: string, question: string, keywords: string[], actionPrompt: string }[];
+  } catch (e) {
+    console.error("Failed to parse Nudges JSON", e);
+    throw new Error("Invalid JSON format from AI.");
+  }
+};
+
+export const addFeatureBlueprint = async (idea: string, notes: Note[]) => {
+  const prompt = `당신은 최고 수준의 소프트웨어 아키텍트입니다.
+사용자가 다음 아이디어를 기존 시스템에 추가하려고 합니다: "${idea}"
+
+[기존 시스템]
+${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
+
+기존 시스템과 중복되지 않으면서 자연스럽게 연결되는 새로운 Domain, Module, Logic을 설계하세요.
+응답 형식은 초기 블루프린트 생성과 동일한 JSON 스키마를 엄격히 따르세요.
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          domains: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                modules: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING },
+                      summary: { type: Type.STRING },
+                      logics: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            title: { type: Type.STRING },
+                            summary: { type: Type.STRING }
+                          },
+                          required: ["title", "summary"]
+                        }
+                      }
+                    },
+                    required: ["title", "summary", "logics"]
+                  }
+                }
+              },
+              required: ["title", "summary", "modules"]
+            }
+          }
+        },
+        required: ["domains"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "[]" } as any);
+  if (!response || !response.text) {
+    throw new Error("Failed to generate feature blueprint.");
+  }
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr) as {
+      domains: {
+        title: string;
+        summary: string;
+        modules: {
+          title: string;
+          summary: string;
+          logics: { title: string; summary: string; }[];
+        }[];
+      }[];
+    };
+  } catch (e) {
+    console.error("Failed to parse Feature Blueprint JSON", e);
+    throw new Error("Invalid JSON format from AI.");
+  }
 };

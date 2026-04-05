@@ -4,6 +4,7 @@ import { signInWithGoogle, logout } from './firebase';
 import { Sidebar } from './components/Sidebar';
 import { NoteEditor } from './components/NoteEditor';
 import { GitHubSync } from './components/GitHubSync';
+import { DashboardView } from './components/DashboardView';
 import { 
   LogOut, 
   PanelLeftClose, 
@@ -15,7 +16,9 @@ import {
   Github,
   FolderGit2,
   Folder,
-  Layers
+  Layers,
+  LayoutDashboard,
+  FileEdit
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Note, OperationType } from './types';
@@ -30,6 +33,7 @@ function MainApp() {
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
+  const [viewMode, setViewMode] = useState<'editor' | 'dashboard'>('dashboard');
 
   const toggleLeftSidebar = (open: boolean) => {
     setIsLeftOpen(open);
@@ -221,6 +225,24 @@ function MainApp() {
 
           <div className="flex items-center gap-1 sm:gap-4">
             <div className="flex items-center gap-1 sm:gap-3 sm:pr-4">
+              {/* View Mode Toggle */}
+              <div className="hidden sm:flex items-center bg-muted/50 p-1 rounded-xl border border-border">
+                <button
+                  onClick={() => setViewMode('dashboard')}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${viewMode === 'dashboard' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  <LayoutDashboard size={16} />
+                  Dashboard
+                </button>
+                <button
+                  onClick={() => setViewMode('editor')}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${viewMode === 'editor' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  <FileEdit size={16} />
+                  Editor
+                </button>
+              </div>
+
               <button 
                 onClick={toggleTheme}
                 className="p-2 text-muted-foreground hover:bg-muted rounded-xl transition-all active:scale-95 hidden sm:flex"
@@ -259,22 +281,34 @@ function MainApp() {
           <div className="max-w-6xl mx-auto w-full h-full">
             <AnimatePresence mode="wait">
               <motion.div 
-                key="editor"
+                key={viewMode === 'dashboard' ? 'dashboard' : 'editor'}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 className="h-full"
               >
                 {selectedProjectId ? (
-                  <NoteEditor 
-                    noteId={selectedNoteId} 
-                    projectId={selectedProjectId}
-                    onSaved={loadNotes}
-                    onDeleted={() => {
-                      setSelectedNoteId(null);
-                      loadNotes();
-                    }}
-                  />
+                  viewMode === 'dashboard' ? (
+                    <DashboardView 
+                      projectId={selectedProjectId}
+                      notes={projectNotes} 
+                      onSelectNote={(id) => {
+                        setSelectedNoteId(id);
+                        setViewMode('editor');
+                      }} 
+                      onNotesChanged={loadNotes}
+                    />
+                  ) : (
+                    <NoteEditor 
+                      noteId={selectedNoteId} 
+                      projectId={selectedProjectId}
+                      onSaved={loadNotes}
+                      onDeleted={() => {
+                        setSelectedNoteId(null);
+                        loadNotes();
+                      }}
+                    />
+                  )
                 ) : (
                   <div className="flex h-full flex-col items-center justify-center text-center max-w-md mx-auto">
                     <div className="w-24 h-24 bg-muted rounded-[2.5rem] flex items-center justify-center mb-8 text-muted-foreground/30 shadow-inner">

@@ -3,8 +3,9 @@ import { collection, onSnapshot, query, where, deleteDoc, doc, addDoc, serverTim
 import { db, auth } from '../firebase';
 import { Note, Project, OperationType } from '../types';
 import { handleFirestoreError } from '../lib/utils';
-import { Folder, FileText, Plus, CheckSquare, Trash2, PanelLeftClose, ChevronDown, Check, FolderGit2, Circle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Folder, FileText, Plus, CheckSquare, Trash2, PanelLeftClose, ChevronDown, Check, FolderGit2, Circle, CheckCircle2, RefreshCw, Sparkles } from 'lucide-react';
 import * as dbManager from '../services/dbManager';
+import { generateInitialBlueprint } from '../services/gemini';
 
 export const Sidebar = ({ 
   onSelectNote, 
@@ -101,6 +102,8 @@ export const Sidebar = ({
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim() || !auth.currentUser) return;
+    
+    setIsCreatingProject(true);
     try {
       const docRef = await addDoc(collection(db, 'projects'), {
         name: newProjectName.trim(),
@@ -108,12 +111,15 @@ export const Sidebar = ({
         uid: auth.currentUser.uid,
         createdAt: serverTimestamp()
       });
-      onSelectProject(docRef.id);
+      const projectId = docRef.id;
+
+      onSelectProject(projectId);
       setIsCreatingProject(false);
       setNewProjectName('');
       setIsProjectMenuOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'projects');
+      setIsCreatingProject(false);
     }
   };
 
@@ -472,18 +478,33 @@ export const Sidebar = ({
                   </div>
                   <div className="border-t border-border p-3 bg-muted/30">
                     {isCreatingProject ? (
-                      <form onSubmit={handleCreateProject} className="flex flex-col gap-2">
-                        <input
-                          type="text"
-                          placeholder="Project Name"
-                          value={newProjectName}
-                          onChange={e => setNewProjectName(e.target.value)}
-                          className="w-full px-3 py-2 text-sm bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 outline-none"
-                          autoFocus
-                        />
+                      <form onSubmit={handleCreateProject} className="flex flex-col gap-3">
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            placeholder="Project Name (e.g., Local Bakery App)"
+                            value={newProjectName}
+                            onChange={e => setNewProjectName(e.target.value)}
+                            className="w-full px-3 py-2 text-sm bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 outline-none"
+                            autoFocus
+                          />
+                        </div>
                         <div className="flex gap-2">
-                          <button type="submit" className="flex-1 bg-primary text-primary-foreground text-xs font-bold py-2 rounded-xl shadow-lg shadow-primary/20">Create</button>
-                          <button type="button" onClick={() => setIsCreatingProject(false)} className="flex-1 bg-secondary text-secondary-foreground text-xs font-bold py-2 rounded-xl">Cancel</button>
+                          <button 
+                            type="submit" 
+                            disabled={!newProjectName.trim()}
+                            className="flex-1 bg-primary text-primary-foreground text-xs font-bold py-2 rounded-xl shadow-lg shadow-primary/20 disabled:opacity-50 flex items-center justify-center gap-1"
+                          >
+                            <Plus size={12} />
+                            Create Project
+                          </button>
+                          <button 
+                            type="button" 
+                            onClick={() => setIsCreatingProject(false)} 
+                            className="flex-1 bg-secondary text-secondary-foreground text-xs font-bold py-2 rounded-xl disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
                         </div>
                       </form>
                     ) : (

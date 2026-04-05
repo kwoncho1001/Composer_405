@@ -117,7 +117,7 @@ service cloud.firestore {
              validStringLength(data, 'folder', 0, 500) &&
              data.noteType in ['Domain', 'Module', 'Logic', 'Snapshot'] &&
              data.status in ['Planned', 'Done', 'Conflict'] &&
-             data.priority in ['A', 'B', 'C', 'Done'] &&
+             data.priority in ['A', 'B', 'C', 'P1', 'P2', 'P3', 'Done'] &&
              (data.lastUpdated is timestamp || data.lastUpdated is string) &&
              isValidList(data.parentNoteIds, 50) &&
              isValidList(data.childNoteIds, 50) &&

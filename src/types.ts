@@ -1,6 +1,6 @@
 export type NoteType = 'Domain' | 'Module' | 'Logic' | 'Snapshot';
 export type NoteStatus = 'Planned' | 'Done' | 'Conflict';
-export type NotePriority = 'A' | 'B' | 'C' | 'Done';
+export type NotePriority = 'P1' | 'P2' | 'P3' | 'A' | 'B' | 'C' | 'Done';
 
 export interface ConflictDetail {
   aspect: string;
@@ -20,6 +20,44 @@ export interface Project {
   repoUrl: string;
   uid: string;
   createdAt: any; // Firestore Timestamp
+}
+
+export interface CSuiteEvaluation {
+  cto: string;
+  cmo: string;
+  cfo: string;
+  consensus: string;
+}
+
+export interface CostEstimate {
+  totalMonthlyCost: string;
+  infrastructure: string;
+  thirdPartyApis: string;
+  maintenance: string;
+  summary: string;
+}
+
+export interface PitchDeck {
+  pressRelease: string;
+  elevatorPitch: string;
+  problemAndSolution: string;
+  targetAudience: string;
+  businessModel: string;
+}
+
+export interface CompetitorAnalysis {
+  coreMechanics: string;
+  weaknesses: string;
+  blueOceanStrategy: string;
+  actionableLogics: string[];
+}
+
+export interface ProactiveNudge {
+  id: string;
+  context: string;
+  question: string;
+  keywords: string[];
+  actionPrompt: string;
 }
 
 export interface Note {

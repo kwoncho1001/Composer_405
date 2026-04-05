@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, collection, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { Note, NoteType, NoteStatus, NotePriority, OperationType } from '../types';
+import { Note, NoteType, NoteStatus, NotePriority, OperationType, CSuiteEvaluation } from '../types';
 import { handleFirestoreError } from '../lib/utils';
-import { Trash2, Save, Eye, Edit3, Sparkles, Loader2, AlertTriangle, CheckCircle2, FileWarning, PanelTop } from 'lucide-react';
+import { Trash2, Save, Eye, Edit3, Sparkles, Loader2, AlertTriangle, CheckCircle2, FileWarning, PanelTop, Users, Code2, Megaphone, DollarSign } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { reformatNote, analyzeLogicUnit, generateFixGuide, translateToBusinessLogic } from '../services/gemini';
+import { reformatNote, analyzeLogicUnit, generateFixGuide, translateToBusinessLogic, evaluateWithCSuite } from '../services/gemini';
 import { fetchFileContent } from '../services/github';
 import * as dbManager from '../services/dbManager';
 import { saveNoteToSync, deleteNoteFromSync } from '../services/syncManager';
@@ -34,6 +34,8 @@ export const NoteEditor = ({ noteId, projectId, onSaved, onDeleted }: { noteId: 
   const [isFormatting, setIsFormatting] = useState(false);
   const [isResolvingConflict, setIsResolvingConflict] = useState(false);
   const [conflictResolutionGuide, setConflictResolutionGuide] = useState<string | null>(null);
+  const [isEvaluatingCSuite, setIsEvaluatingCSuite] = useState(false);
+  const [cSuiteEval, setCSuiteEval] = useState<CSuiteEvaluation | null>(null);
   const [showMetadata, setShowMetadata] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('showMetadata') !== 'false';
@@ -215,11 +217,27 @@ export const NoteEditor = ({ noteId, projectId, onSaved, onDeleted }: { noteId: 
     }
   };
 
+  const getFilePathForConflict = async () => {
+    let filePath = note?.originPath || note?.folder;
+    if (!filePath || filePath === '/') {
+      if (note?.childNoteIds && note.childNoteIds.length > 0) {
+        const allNotes = await dbManager.getAllNotes();
+        const childSnapshots = allNotes.filter(n => note.childNoteIds?.includes(n.id) && n.noteType === 'Snapshot');
+        if (childSnapshots.length > 0) {
+          filePath = childSnapshots[0].originPath || childSnapshots[0].folder;
+        }
+      }
+    }
+    return filePath;
+  };
+
   const handleResolveConflictWithCode = async () => {
-    const filePath = note?.originPath || note?.folder;
-    if (!note || !noteId || !projectId || !filePath) return;
+    if (!note || !noteId || !projectId) return;
     setIsResolvingConflict(true);
     try {
+      const filePath = await getFilePathForConflict();
+      if (!filePath || filePath === '/') throw new Error("Could not determine the source file path for this logic.");
+
       const projectDoc = await getDoc(doc(db, 'projects', projectId));
       if (!projectDoc.exists()) throw new Error("Project not found");
       const repoUrl = projectDoc.data().repoUrl;
@@ -257,10 +275,12 @@ export const NoteEditor = ({ noteId, projectId, onSaved, onDeleted }: { noteId: 
   };
 
   const handleResolveConflictWithDesign = async () => {
-    const filePath = note?.originPath || note?.folder;
-    if (!note || !noteId || !projectId || !filePath) return;
+    if (!note || !noteId || !projectId) return;
     setIsResolvingConflict(true);
     try {
+      const filePath = await getFilePathForConflict();
+      if (!filePath || filePath === '/') throw new Error("Could not determine the source file path for this logic.");
+
       const projectDoc = await getDoc(doc(db, 'projects', projectId));
       if (!projectDoc.exists()) throw new Error("Project not found");
       const repoUrl = projectDoc.data().repoUrl;
@@ -274,6 +294,20 @@ export const NoteEditor = ({ noteId, projectId, onSaved, onDeleted }: { noteId: 
       alert("Failed to generate guide: " + (error as Error).message);
     } finally {
       setIsResolvingConflict(false);
+    }
+  };
+
+  const handleCSuiteEvaluation = async () => {
+    if (!note || !noteId || noteId === 'new') return;
+    setIsEvaluatingCSuite(true);
+    try {
+      const evaluation = await evaluateWithCSuite(note.title || '', note.summary || '', note.noteType || 'Logic');
+      setCSuiteEval(evaluation);
+    } catch (error) {
+      console.error("Failed to evaluate with C-Suite", error);
+      alert("Failed to evaluate: " + (error as Error).message);
+    } finally {
+      setIsEvaluatingCSuite(false);
     }
   };
 
@@ -370,6 +404,19 @@ export const NoteEditor = ({ noteId, projectId, onSaved, onDeleted }: { noteId: 
             >
               <PanelTop size={12} />
               <span>Meta</span>
+            </button>
+            <button
+              onClick={handleCSuiteEvaluation}
+              disabled={isEvaluatingCSuite || isSaving || noteId === 'new'}
+              className="flex items-center justify-center gap-2 px-3 py-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-500 text-[9px] sm:text-[10px] font-black uppercase tracking-widest rounded-xl transition-all active:scale-95 border border-indigo-500/20 disabled:opacity-50 flex-1 sm:flex-none"
+              title="임원진 이사회 소집 (AI C-Suite)"
+            >
+              {isEvaluatingCSuite ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <Users size={12} />
+              )}
+              <span>C-Suite</span>
             </button>
             <button
               onClick={handleReformat}
@@ -473,14 +520,14 @@ export const NoteEditor = ({ noteId, projectId, onSaved, onDeleted }: { noteId: 
                 <div className="col-span-1">
                   <label className="block text-[10px] sm:text-xs font-black text-muted-foreground/70 uppercase mb-1 sm:mb-2 tracking-widest">Priority</label>
                   <select 
-                    value={note.priority} 
+                    value={note.priority || 'P3'} 
                     onChange={e => updateNote({priority: e.target.value as NotePriority})}
                     disabled={note.status === 'Done'}
                     className={`w-full bg-background/50 border border-border rounded-xl p-2 sm:p-3 text-xs font-bold focus:ring-2 focus:ring-primary/20 outline-none transition-all appearance-none cursor-pointer ${note.status === 'Done' ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
-                    <option value="A">A - Critical</option>
-                    <option value="B">B - Normal</option>
-                    <option value="C">C - Low</option>
+                    <option value="P1">P1 - Must-have</option>
+                    <option value="P2">P2 - Nice-to-have</option>
+                    <option value="P3">P3 - Backlog</option>
                     <option value="Done">Done</option>
                   </select>
                 </div>
@@ -554,6 +601,56 @@ export const NoteEditor = ({ noteId, projectId, onSaved, onDeleted }: { noteId: 
 
         {/* Content Area */}
         <div className="space-y-6 sm:space-y-8">
+          {cSuiteEval && (
+            <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl sm:rounded-3xl p-4 sm:p-8 space-y-4 sm:space-y-6 relative overflow-hidden group">
+              <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500/50 group-hover:bg-indigo-500 transition-colors"></div>
+              <div className="flex justify-between items-center">
+                <h3 className="text-[10px] sm:text-[12px] font-black text-indigo-500 uppercase tracking-[0.3em] flex items-center gap-2 sm:gap-3">
+                  <Users size={16} />
+                  AI C-Suite Evaluation
+                </h3>
+                <button onClick={() => setCSuiteEval(null)} className="text-xs text-muted-foreground hover:text-foreground">Dismiss</button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* CTO */}
+                <div className="bg-background/50 border border-border rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-blue-500">
+                    <Code2 size={16} />
+                    <span className="text-xs font-black uppercase tracking-widest">CTO (기술)</span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-foreground/90 leading-relaxed">{cSuiteEval.cto}</p>
+                </div>
+
+                {/* CMO */}
+                <div className="bg-background/50 border border-border rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-pink-500">
+                    <Megaphone size={16} />
+                    <span className="text-xs font-black uppercase tracking-widest">CMO (마케팅)</span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-foreground/90 leading-relaxed">{cSuiteEval.cmo}</p>
+                </div>
+
+                {/* CFO */}
+                <div className="bg-background/50 border border-border rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-green-500">
+                    <DollarSign size={16} />
+                    <span className="text-xs font-black uppercase tracking-widest">CFO (재무)</span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-foreground/90 leading-relaxed">{cSuiteEval.cfo}</p>
+                </div>
+              </div>
+
+              <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-4 mt-4 flex items-start gap-3">
+                <Sparkles className="text-indigo-500 shrink-0 mt-0.5" size={16} />
+                <div>
+                  <span className="text-[10px] font-black text-indigo-500 uppercase tracking-widest block mb-1">최종 결의안 (Consensus)</span>
+                  <p className="text-sm font-bold text-foreground">{cSuiteEval.consensus}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {note.status === 'Conflict' && (
             <div className="bg-destructive/10 border border-destructive/50 rounded-2xl sm:rounded-3xl p-4 sm:p-8 space-y-4 sm:space-y-6 relative overflow-hidden group">
               <div className="absolute top-0 left-0 w-1 h-full bg-destructive/50 group-hover:bg-destructive transition-colors"></div>
