@@ -54,6 +54,7 @@ export interface CompetitorAnalysis {
 
 export interface ProactiveNudge {
   id: string;
+  nudgeType: 'WhatIf' | 'Gap' | 'Constraint' | 'Inversion';
   context: string;
   question: string;
   keywords: string[];

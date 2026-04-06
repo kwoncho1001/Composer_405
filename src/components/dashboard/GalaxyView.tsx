@@ -49,41 +49,59 @@ export const GalaxyView: React.FC<GalaxyViewProps> = ({ notes, projectName, onSe
       type: 'project'
     });
 
-    // Extract unique domains
-    const domains = Array.from(new Set(notes.map(n => n.folder || 'General')));
-    
-    domains.forEach((domain, i) => {
-      const domainId = `domain-${domain}`;
+    const noteIds = new Set(notes.map(n => n.id));
+
+    // Add notes as nodes
+    notes.forEach(note => {
+      let radius = 15;
+      let group = 1;
+      
+      if (note.noteType === 'Domain') { radius = 30; group = 1; }
+      else if (note.noteType === 'Module') { radius = 20; group = 2; }
+      else if (note.noteType === 'Logic') { radius = 12; group = 3; }
+      else if (note.noteType === 'Snapshot') { radius = 8; group = 4; }
+
       nodes.push({
-        id: domainId,
-        group: i + 1,
-        radius: 25,
-        title: domain,
-        type: 'domain'
-      });
-      links.push({
-        source: 'project',
-        target: domainId,
-        value: 2
+        id: note.id,
+        group: group,
+        radius: radius,
+        title: note.title || 'Untitled',
+        type: note.noteType.toLowerCase(),
+        status: note.status
       });
     });
 
-    // Add notes
+    // Add links based on parentNoteIds
     notes.forEach(note => {
-      const domainId = `domain-${note.folder || 'General'}`;
-      nodes.push({
-        id: note.id,
-        group: domains.indexOf(note.folder || 'General') + 1,
-        radius: 15,
-        title: note.title || 'Untitled',
-        type: 'note',
-        status: note.status
-      });
-      links.push({
-        source: domainId,
-        target: note.id,
-        value: 1
-      });
+      if (note.parentNoteIds && note.parentNoteIds.length > 0) {
+        let hasValidParent = false;
+        note.parentNoteIds.forEach(parentId => {
+          if (noteIds.has(parentId)) {
+            links.push({
+              source: parentId,
+              target: note.id,
+              value: 1
+            });
+            hasValidParent = true;
+          }
+        });
+        
+        // Fallback: if no valid parent exists in the current notes array, link to project
+        if (!hasValidParent) {
+          links.push({
+            source: 'project',
+            target: note.id,
+            value: note.noteType === 'Domain' ? 2 : 1
+          });
+        }
+      } else {
+        // No parent specified, link to project root
+        links.push({
+          source: 'project',
+          target: note.id,
+          value: note.noteType === 'Domain' ? 2 : 1
+        });
+      }
     });
 
     const svg = d3.select(svgRef.current)
@@ -103,10 +121,15 @@ export const GalaxyView: React.FC<GalaxyViewProps> = ({ notes, projectName, onSe
     svg.call(zoom);
 
     const simulation = d3.forceSimulation<Node>(nodes)
-      .force("link", d3.forceLink<Node, Link>(links).id(d => d.id).distance(d => d.source === 'project' ? 150 : 80))
-      .force("charge", d3.forceManyBody().strength(-300))
+      .force("link", d3.forceLink<Node, Link>(links).id(d => d.id).distance(d => {
+        if (d.source === 'project') return 120;
+        if ((d.source as any).type === 'domain') return 80;
+        if ((d.source as any).type === 'module') return 50;
+        return 40;
+      }))
+      .force("charge", d3.forceManyBody().strength(-200))
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collide", d3.forceCollide<Node>().radius(d => d.radius + 10).iterations(2));
+      .force("collide", d3.forceCollide<Node>().radius(d => d.radius + 15).iterations(2));
 
     const link = g.append("g")
       .attr("stroke", "#999")
@@ -131,9 +154,9 @@ export const GalaxyView: React.FC<GalaxyViewProps> = ({ notes, projectName, onSe
         if (d.status === 'In Progress') return '#f59e0b'; // amber-500
         return '#64748b'; // slate-500
       })
-      .style("cursor", d => d.type === 'note' ? 'pointer' : 'default')
+      .style("cursor", d => d.type !== 'project' ? 'pointer' : 'default')
       .on("click", (event, d) => {
-        if (d.type === 'note') {
+        if (d.type !== 'project') {
           onSelectNote(d.id);
         }
       });

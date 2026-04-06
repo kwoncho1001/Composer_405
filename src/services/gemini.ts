@@ -1,10 +1,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { Note } from "../types";
+import { Note, ProactiveNudge } from "../types";
 import { withTimeout } from "../lib/utils";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MODEL = "gemini-3.1-flash-lite-preview";
-const PRO_MODEL = "gemini-3.1-pro-preview";
+const PRO_MODEL = "gemini-3.1-flash-lite-preview";
 
 // Phase 0: Market-Fit Validator (초기 뼈대 자동 생성)
 export const generateInitialBlueprint = async (businessIdea: string) => {
@@ -936,15 +936,96 @@ ${notes.map(n => `Type: ${n.noteType} | Title: ${n.title} | Summary: ${n.summary
 };
 
 // Phase 9: Proactive AI Co-founder (Continuous Ideation)
-export const generateProactiveNudges = async (notes: Note[]) => {
-  const prompt = `당신은 코딩을 전혀 모르는 비전공자 창업가(CEO)와 함께 일하는 '비즈니스/프로덕트 전문 AI 코파운더'입니다. 
-모토는 "Ideas don't come fully formed." 입니다.
-현재 기획된 시스템을 분석하여, 비즈니스 가치(매출, 유저 확보, 리텐션, 바이럴 등)를 극대화할 수 있는 기발한 프로덕트 아이디어 3가지를 제안하세요.
+export const refineIdeaWithSparring = async (notes: Note[], nudge: ProactiveNudge, userResponse: string) => {
+  const prompt = `당신은 사용자의 아이디어를 구체화하는 AI Co-founder입니다.
+사용자가 당신의 도발적인 질문(Nudge)에 대해 반박하거나 새로운 아이디어를 제시했습니다.
+사용자의 응답을 바탕으로, 실제 시스템에 추가할 수 있는 구체적인 기획안(Note)을 작성하세요.
 
-[🚨 절대 금지 사항 - 매우 중요]
-- 개발자 용어(AST, CI/CD, PR, 리팩토링, 코드 스멜, 파이어베이스, 동기화, 아키텍처 등)를 절대 사용하지 마세요.
-- 철저하게 '고객이 느끼는 가치(UX)'와 '돈을 버는 방법(BM)' 관점에서만 이야기하세요.
-- 중학생도 이해할 수 있는 아주 쉽고 매력적인 일상어로 설명하세요.
+[AI의 도발적 질문 (Nudge)]
+타입: ${nudge.nudgeType}
+질문: ${nudge.question}
+
+[사용자의 반응 (Sparring)]
+"${userResponse}"
+
+[현재 시스템의 노트들]
+${notes.map(n => `Title: ${n.title}`).join('\n')}
+
+위 내용을 바탕으로, 사용자의 의도를 완벽하게 반영한 새로운 모듈(Note)을 설계하세요.
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "title": "모듈 이름 (예: VIP 구독 결제 시스템)",
+  "content": "사용자의 의도가 반영된 구체적인 기능 설명 및 비즈니스 로직",
+  "folder": "적절한 도메인 분류 (예: Monetization, Core, Growth 등)",
+  "priority": "P1" | "P2" | "P3",
+  "noteType": "Domain" | "Module" | "Logic"
+}
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          content: { type: Type.STRING },
+          folder: { type: Type.STRING },
+          priority: { type: Type.STRING },
+          noteType: { type: Type.STRING }
+        },
+        required: ["title", "content", "folder", "priority", "noteType"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "{}" } as any);
+  if (!response || !response.text) {
+    throw new Error("Failed to refine idea with sparring.");
+  }
+
+  try {
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr) as { title: string, content: string, folder: string, priority: 'P1'|'P2'|'P3', noteType: 'Domain'|'Module'|'Logic' };
+  } catch (e) {
+    console.error("Failed to parse Refined Idea JSON", e);
+    throw new Error("Invalid JSON format from AI.");
+  }
+};
+export const generateProactiveNudges = async (notes: Note[], pastNudges: string[] = [], targetType?: 'WhatIf' | 'Gap' | 'Constraint' | 'Inversion') => {
+  const lenses = [
+    "Gen-Z 타겟", "극단적 미니멀리즘", "게이미피케이션", "하드코어 B2B", 
+    "블록체인/Web3", "오프라인 결합", "10배 비싼 프리미엄", "로컬 커뮤니티 기반",
+    "구독형 모델", "일회성 이벤트", "AI 완전 자동화", "수동/장인정신"
+  ];
+  
+  const randomLenses = lenses.sort(() => 0.5 - Math.random()).slice(0, 3);
+
+  const typeInstruction = targetType 
+    ? `반드시 '${targetType}' 타입의 도발적인 질문(Nudge) 1개를 생성하세요.`
+    : `반드시 4가지 타입(WhatIf, Gap, Constraint, Inversion) 각각에 대해 2개씩, 총 8개의 도발적인 질문(Nudge)을 생성하세요.`;
+
+  const blacklistInstruction = pastNudges.length > 0
+    ? `\n[주의: 다음 아이디어들은 이미 사용자가 거절했거나 검토한 내용이므로 **절대 중복해서 제안하지 마세요**]\n${pastNudges.map(n => `- ${n}`).join('\n')}\n`
+    : '';
+
+  const prompt = `당신은 사용자의 아이디어를 자극하고 도발하는 AI Co-founder입니다.
+사용자의 프로젝트 노트들을 분석하여, 정답을 주지 말고 **사용자가 반박하거나 영감을 얻을 수 있는 도발적인 질문(Nudge)**을 생성하세요.
+"Ideas don't come fully formed" 철학에 따라, 사용자가 스스로 생각하게 만들어야 합니다.
+
+${typeInstruction}
+
+[랜덤 관점 (Lens)]
+이번 생성에는 다음 관점들을 적극적으로 반영하여 뻔하지 않은 질문을 만드세요:
+${randomLenses.join(', ')}
+${blacklistInstruction}
+[4가지 Nudge 타입 정의]
+1. WhatIf (극단적 비유): "만약 이 앱을 틴더처럼 만든다면?", "링크드인처럼 전문가 네트워크로 푼다면?"
+2. Gap (구조적 공백): "결제는 있는데 환불이 없네요?", "유저가 내일 다시 올 이유(Retention)가 없네요?"
+3. Constraint (강제 제약): "내일 당장 1개 기능만 런칭해야 한다면?", "예산이 0원이라면?"
+4. Inversion (역발상): "이 프로젝트를 가장 빠르고 확실하게 망하게 하려면?"
 
 [현재 시스템]
 ${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
@@ -954,10 +1035,11 @@ ${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
   "nudges": [
     {
       "id": "고유문자열",
-      "context": "현재 서비스의 비즈니스적 상황 (예: 현재는 사용자가 상품을 단건으로만 구매하고 이탈하기 쉬운 구조네요.)",
-      "question": "영감을 주는 매력적인 질문 (예: 단골 손님을 꽉 잡기 위해, 매월 알아서 결제되는 'VIP 정기 구독' 모델을 도입해 보는 건 어떨까요?)",
-      "keywords": ["구독 모델", "단골 확보", "VIP 혜택"],
-      "actionPrompt": "이 아이디어를 시스템에 추가하기 위한 프롬프트 (예: VIP 정기 구독 결제 및 혜택 관리 로직 추가)"
+      "nudgeType": "WhatIf" | "Gap" | "Constraint" | "Inversion",
+      "context": "현재 상황에 대한 짧은 진단 (예: 현재는 사용자가 혼자 쓰는 툴이네요.)",
+      "question": "도발적이고 극단적인 질문 (예: 만약 이 앱을 틴더처럼 유저끼리 스와이프해서 매칭되게 만든다면 어떨까요?)",
+      "keywords": ["#틴더방식", "#소셜", "#매칭"],
+      "actionPrompt": "이 아이디어를 시스템에 추가하기 위한 프롬프트"
     }
   ]
 }
@@ -977,12 +1059,13 @@ ${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
               type: Type.OBJECT,
               properties: {
                 id: { type: Type.STRING },
-                context: { type: Type.STRING },
+                nudgeType: { type: Type.STRING },
+          context: { type: Type.STRING },
                 question: { type: Type.STRING },
                 keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
                 actionPrompt: { type: Type.STRING }
               },
-              required: ["id", "context", "question", "keywords", "actionPrompt"]
+              required: ["id", "nudgeType", "context", "question", "keywords", "actionPrompt"]
             }
           }
         },
@@ -998,7 +1081,7 @@ ${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
 
   try {
     const jsonStr = response.text.trim();
-    return JSON.parse(jsonStr).nudges as { id: string, context: string, question: string, keywords: string[], actionPrompt: string }[];
+    return JSON.parse(jsonStr).nudges as { id: string, nudgeType: 'WhatIf' | 'Gap' | 'Constraint' | 'Inversion', context: string, question: string, keywords: string[], actionPrompt: string }[];
   } catch (e) {
     console.error("Failed to parse Nudges JSON", e);
     throw new Error("Invalid JSON format from AI.");

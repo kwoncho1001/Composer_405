@@ -31,8 +31,8 @@ function MainApp() {
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  const [isLeftOpen, setIsLeftOpen] = useState(true);
-  const [isRightOpen, setIsRightOpen] = useState(true);
+  const [isLeftOpen, setIsLeftOpen] = useState(false);
+  const [isRightOpen, setIsRightOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'editor' | 'dashboard'>('dashboard');
 
   const toggleLeftSidebar = (open: boolean) => {

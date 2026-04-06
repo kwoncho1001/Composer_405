@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Note, CostEstimate, PitchDeck, CompetitorAnalysis, ProactiveNudge } from '../types';
 import { Layers, Blocks, Cpu, Code, AlertCircle, CheckCircle2, CircleDashed, Target, Loader2, X, Receipt, Cloud, Wrench, Zap, Presentation, FileText, Lightbulb, Users, Briefcase, Swords, Crosshair, ShieldAlert, Rocket, PlusCircle, Sparkles, MessageSquarePlus, ChevronRight, LayoutGrid, Map, Network } from 'lucide-react';
-import { scopeMVP, estimateProjectCost, generatePitchDeck, analyzeCompetitor, generateInitialBlueprint, generateProactiveNudges, addFeatureBlueprint } from '../services/gemini';
+import { scopeMVP, estimateProjectCost, generatePitchDeck, analyzeCompetitor, generateInitialBlueprint, generateProactiveNudges, addFeatureBlueprint, refineIdeaWithSparring } from '../services/gemini';
 import * as dbManager from '../services/dbManager';
 import { saveNoteToSync } from '../services/syncManager';
 import ReactMarkdown from 'react-markdown';
@@ -43,6 +43,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
   const [activeView, setActiveView] = useState<'bento' | 'journey' | 'galaxy'>('bento');
 
   const [nudges, setNudges] = useState<ProactiveNudge[]>([]);
+  const [pastNudges, setPastNudges] = useState<string[]>([]);
+  const [loadingNudgeTypes, setLoadingNudgeTypes] = useState<('WhatIf' | 'Gap' | 'Constraint' | 'Inversion')[]>([]);
   const [isFetchingNudges, setIsFetchingNudges] = useState(false);
   const [isCoFounderOpen, setIsCoFounderOpen] = useState(false);
   const [applyingNudgeId, setApplyingNudgeId] = useState<string | null>(null);
@@ -52,7 +54,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
     if (nudges.length === 0 && notes.length > 0) {
       setIsFetchingNudges(true);
       try {
-        const result = await generateProactiveNudges(notes);
+        const result = await generateProactiveNudges(notes, pastNudges);
         setNudges(result);
       } catch (e) {
         console.error(e);
@@ -62,12 +64,92 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
     }
   };
 
+  const handleRerollAllNudges = async () => {
+    setIsFetchingNudges(true);
+    setNudges([]);
+    try {
+      const result = await generateProactiveNudges(notes, pastNudges);
+      setNudges(result);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsFetchingNudges(false);
+    }
+  };
+
   // Fetch nudges automatically when entering Bento view if empty
   React.useEffect(() => {
     if (activeView === 'bento' && nudges.length === 0 && notes.length > 0 && !isFetchingNudges) {
       handleOpenCoFounder();
     }
   }, [activeView, notes.length]);
+
+  const handleRejectNudge = async (nudgeId: string) => {
+    const rejectedNudge = nudges.find(n => n.id === nudgeId);
+    if (!rejectedNudge) return;
+
+    const newPastNudges = [...pastNudges, rejectedNudge.question].slice(-20);
+    setPastNudges(newPastNudges);
+
+    setNudges(prev => prev.filter(n => n.id !== nudgeId));
+    setLoadingNudgeTypes(prev => [...prev, rejectedNudge.nudgeType]);
+
+    try {
+      const result = await generateProactiveNudges(notes, newPastNudges, rejectedNudge.nudgeType);
+      if (result && result.length > 0) {
+        setNudges(prev => [...prev, result[0]]);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingNudgeTypes(prev => {
+        const idx = prev.indexOf(rejectedNudge.nudgeType);
+        if (idx > -1) {
+          const next = [...prev];
+          next.splice(idx, 1);
+          return next;
+        }
+        return prev;
+      });
+    }
+  };
+
+  const handleSparringSubmit = async (nudge: ProactiveNudge, response: string) => {
+    setApplyingNudgeId(nudge.id);
+    try {
+      const refined = await refineIdeaWithSparring(notes, nudge, response);
+      
+      const newNote: Note = {
+        id: crypto.randomUUID(),
+        projectId,
+        title: refined.title,
+        summary: refined.content.substring(0, 50),
+        body: refined.content,
+        noteType: refined.noteType,
+        folder: refined.folder,
+        priority: refined.priority,
+        status: 'Planned',
+        parentNoteIds: [],
+        childNoteIds: [],
+        relatedNoteIds: [],
+        uid: 'local',
+        createdAt: new Date(),
+        lastUpdated: new Date()
+      };
+
+      const updatedNotes = [...notes, newNote];
+      saveNoteToSync(newNote);
+      if (onNotesChanged) onNotesChanged();
+      
+      // Remove the nudge after successful sparring
+      setNudges(prev => prev.filter(n => n.id !== nudge.id));
+    } catch (error) {
+      console.error("Failed to refine idea with sparring:", error);
+      alert("아이디어 구체화에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setApplyingNudgeId(null);
+    }
+  };
 
   const handleAcceptNudge = async (nudge: ProactiveNudge) => {
     setApplyingNudgeId(nudge.id);
@@ -431,27 +513,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
 
   return (
     <div className="h-full flex flex-col relative bg-background">
-      <div className="mb-6 flex items-center justify-between px-6 pt-6">
+      <div className="mb-4 md:mb-6 flex flex-col md:flex-row md:items-center justify-between px-4 md:px-6 pt-4 md:pt-6 gap-4">
         <div>
-          <h2 className="text-2xl font-black tracking-tight">Business Command Center</h2>
-          <p className="text-muted-foreground text-sm mt-1">Strategic overview of your system architecture and implementation status.</p>
+          <h2 className="text-xl md:text-2xl font-black tracking-tight">Business Command Center</h2>
+          <p className="text-muted-foreground text-xs md:text-sm mt-1">Strategic overview of your system architecture and implementation status.</p>
         </div>
-        <div className="flex gap-2 bg-muted/50 p-1 rounded-xl border border-border">
+        <div className="flex gap-1 md:gap-2 bg-muted/50 p-1 rounded-xl border border-border overflow-x-auto hide-scrollbar">
           <button 
             onClick={() => setActiveView('bento')}
-            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeView === 'bento' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-bold flex items-center gap-1.5 md:gap-2 transition-all whitespace-nowrap ${activeView === 'bento' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
           >
             <LayoutGrid size={16} /> Executive
           </button>
           <button 
             onClick={() => setActiveView('journey')}
-            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeView === 'journey' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-bold flex items-center gap-1.5 md:gap-2 transition-all whitespace-nowrap ${activeView === 'journey' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
           >
             <Map size={16} /> Journey
           </button>
           <button 
             onClick={() => setActiveView('galaxy')}
-            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${activeView === 'galaxy' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-bold flex items-center gap-1.5 md:gap-2 transition-all whitespace-nowrap ${activeView === 'galaxy' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
           >
             <Network size={16} /> Galaxy
           </button>
@@ -464,7 +546,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
             notes={notes} 
             nudges={nudges} 
             isFetchingNudges={isFetchingNudges} 
+            loadingNudgeTypes={loadingNudgeTypes}
             onAcceptNudge={handleAcceptNudge} 
+            onSparringSubmit={handleSparringSubmit}
+            onRejectNudge={handleRejectNudge}
+            onRerollAllNudges={handleRerollAllNudges}
             applyingNudgeId={applyingNudgeId}
             onOpenAction={handleActionOpen}
           />

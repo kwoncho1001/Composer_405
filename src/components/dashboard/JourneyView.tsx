@@ -16,23 +16,23 @@ export const JourneyView: React.FC<JourneyViewProps> = ({ notes, onSelectNote })
   ];
 
   return (
-    <div className="h-full overflow-x-auto custom-scrollbar p-6">
-      <div className="flex gap-8 min-w-max h-full">
+    <div className="h-full overflow-x-auto custom-scrollbar p-4 md:p-6">
+      <div className="flex gap-4 md:gap-8 min-w-max h-full">
         {stages.map((stage, index) => {
           const stageNotes = notes.filter(n => n.status === stage.id);
           
           return (
-            <div key={stage.id} className="w-80 flex flex-col h-full relative">
+            <div key={stage.id} className="w-72 md:w-80 flex flex-col h-full relative">
               {/* Connection Line */}
               {index < stages.length - 1 && (
-                <div className="absolute top-8 left-full w-8 h-0.5 bg-border z-0"></div>
+                <div className="absolute top-8 left-full w-4 md:w-8 h-0.5 bg-border z-0"></div>
               )}
               
-              <div className={`p-4 rounded-2xl border ${stage.border} ${stage.bg} flex items-center gap-3 mb-6 relative z-10`}>
-                <stage.icon size={24} className={stage.color} />
+              <div className={`p-3 md:p-4 rounded-2xl border ${stage.border} ${stage.bg} flex items-center gap-2 md:gap-3 mb-4 md:mb-6 relative z-10`}>
+                <stage.icon size={20} className={`md:w-6 md:h-6 ${stage.color}`} />
                 <div>
-                  <h3 className={`font-black ${stage.color}`}>{stage.title}</h3>
-                  <p className="text-xs text-muted-foreground font-medium">{stageNotes.length} modules</p>
+                  <h3 className={`font-black text-sm md:text-base ${stage.color}`}>{stage.title}</h3>
+                  <p className="text-[10px] md:text-xs text-muted-foreground font-medium">{stageNotes.length} modules</p>
                 </div>
               </div>
               
