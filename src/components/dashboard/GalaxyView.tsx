@@ -1,11 +1,12 @@
 import React, { useEffect, useRef } from 'react';
-import { Note } from '../../types';
+import { Note, LensType } from '../../types';
 import * as d3 from 'd3';
 
 interface GalaxyViewProps {
   notes: Note[];
   projectName: string;
   onSelectNote: (id: string) => void;
+  activeLens: LensType;
 }
 
 interface Node extends d3.SimulationNodeDatum {
@@ -13,7 +14,7 @@ interface Node extends d3.SimulationNodeDatum {
   group: number;
   radius: number;
   title: string;
-  type: 'project' | 'domain' | 'note';
+  type: 'project' | 'domain' | 'module' | 'logic' | 'snapshot';
   status?: string;
 }
 
@@ -23,12 +24,21 @@ interface Link extends d3.SimulationLinkDatum<Node> {
   value: number;
 }
 
-export const GalaxyView: React.FC<GalaxyViewProps> = ({ notes, projectName, onSelectNote }) => {
+export const GalaxyView: React.FC<GalaxyViewProps> = ({ notes, projectName, onSelectNote, activeLens }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!svgRef.current || !containerRef.current || notes.length === 0) return;
+
+    // Filter notes by activeLens
+    const filteredNotes = notes.filter(n => {
+      if (n.noteType === 'Domain' || n.noteType === 'Module') {
+        if (n.lens && n.lens !== activeLens) return false;
+        if (!n.lens && activeLens !== 'Feature') return false;
+      }
+      return true;
+    });
 
     const width = containerRef.current.clientWidth;
     const height = containerRef.current.clientHeight;
@@ -49,10 +59,10 @@ export const GalaxyView: React.FC<GalaxyViewProps> = ({ notes, projectName, onSe
       type: 'project'
     });
 
-    const noteIds = new Set(notes.map(n => n.id));
+    const noteIds = new Set(filteredNotes.map(n => n.id));
 
     // Add notes as nodes
-    notes.forEach(note => {
+    filteredNotes.forEach(note => {
       let radius = 15;
       let group = 1;
       
@@ -66,13 +76,13 @@ export const GalaxyView: React.FC<GalaxyViewProps> = ({ notes, projectName, onSe
         group: group,
         radius: radius,
         title: note.title || 'Untitled',
-        type: note.noteType.toLowerCase(),
+        type: note.noteType.toLowerCase() as 'project' | 'domain' | 'module' | 'logic' | 'snapshot',
         status: note.status
       });
     });
 
     // Add links based on parentNoteIds
-    notes.forEach(note => {
+    filteredNotes.forEach(note => {
       if (note.parentNoteIds && note.parentNoteIds.length > 0) {
         let hasValidParent = false;
         note.parentNoteIds.forEach(parentId => {
@@ -170,7 +180,7 @@ export const GalaxyView: React.FC<GalaxyViewProps> = ({ notes, projectName, onSe
       .join("text")
       .text(d => d.title.length > 15 ? d.title.substring(0, 15) + '...' : d.title)
       .attr("font-size", d => d.type === 'project' ? "14px" : d.type === 'domain' ? "12px" : "10px")
-      .attr("font-weight", d => d.type === 'note' ? "normal" : "bold")
+      .attr("font-weight", d => (d.type === 'logic' || d.type === 'snapshot') ? "normal" : "bold")
       .attr("fill", "currentColor")
       .attr("text-anchor", "middle")
       .attr("dy", d => d.radius + 15)

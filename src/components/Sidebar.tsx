@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { collection, onSnapshot, query, where, deleteDoc, doc, addDoc, serverTimestamp, getDocs, writeBatch } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { Note, Project, OperationType } from '../types';
+import { Note, Project, OperationType, LensType } from '../types';
 import { handleFirestoreError } from '../lib/utils';
-import { Folder, FileText, Plus, CheckSquare, Trash2, PanelLeftClose, ChevronDown, Check, FolderGit2, Circle, CheckCircle2, RefreshCw, Sparkles } from 'lucide-react';
+import { Folder, FileText, Plus, CheckSquare, Trash2, PanelLeftClose, ChevronDown, Check, FolderGit2, Circle, CheckCircle2, RefreshCw, Sparkles, FoldVertical, UnfoldVertical } from 'lucide-react';
 import * as dbManager from '../services/dbManager';
 import { generateInitialBlueprint } from '../services/gemini';
 
@@ -14,7 +14,9 @@ export const Sidebar = ({
   selectedProjectId,
   onSelectProject,
   onNotesChanged,
-  notes
+  notes,
+  activeLens,
+  setActiveLens
 }: { 
   onSelectNote: (id: string) => void, 
   selectedNoteId: string | null, 
@@ -22,7 +24,9 @@ export const Sidebar = ({
   selectedProjectId: string | null,
   onSelectProject: (id: string | null) => void,
   onNotesChanged?: () => void,
-  notes: Note[]
+  notes: Note[],
+  activeLens: LensType,
+  setActiveLens: (lens: LensType) => void
 }) => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
@@ -35,7 +39,16 @@ export const Sidebar = ({
   const [projectToDeleteId, setProjectToDeleteId] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [collapsedIds, setCollapsedIds] = useState<string[]>([]);
-  const [viewMode, setViewMode] = useState<'business' | 'snapshot'>('business');
+
+  const handleCollapseAll = () => {
+    const allNoteIds = notes.map(n => n.id);
+    const allPaths = Array.from(new Set(notes.filter(n => n.noteType === 'Snapshot' && n.originPath).map(n => `folder:${n.originPath}`)));
+    setCollapsedIds([...allNoteIds, ...allPaths]);
+  };
+
+  const handleExpandAll = () => {
+    setCollapsedIds([]);
+  };
 
   const subtreeStatusMap = React.useMemo(() => {
     const statusMap: Record<string, 'Done' | 'Conflict' | 'Planned'> = {};
@@ -317,10 +330,10 @@ export const Sidebar = ({
       const isCollapsed = collapsedIds.includes(`folder:${path}`);
       const snapsInPath = pathGroups[path];
       
-      // Find unique parent Logic notes for these snapshots
+      // Find unique parent notes for these snapshots
       const parentIds = Array.from(new Set(snapsInPath.flatMap(s => s.parentNoteIds)));
-      const logicNotes = notes.filter(n => parentIds.includes(n.id) && n.noteType === 'Logic');
-      const orphanSnaps = snapsInPath.filter(s => !s.parentNoteIds.some(pid => logicNotes.some(l => l.id === pid)));
+      const parentNotes = notes.filter(n => parentIds.includes(n.id));
+      const orphanSnaps = snapsInPath.filter(s => !s.parentNoteIds.some(pid => parentNotes.some(l => l.id === pid)));
 
       return (
         <div key={`folder:${path}`} className="mt-1">
@@ -339,15 +352,15 @@ export const Sidebar = ({
           
           {!isCollapsed && (
             <div className="mt-1">
-              {logicNotes.map(logicNote => {
-                const isLogicCollapsed = collapsedIds.includes(logicNote.id);
-                // Only show snapshots that belong to this path and this logic note
-                const childSnaps = snapsInPath.filter(s => s.parentNoteIds.includes(logicNote.id));
+              {parentNotes.map(parentNode => {
+                const isNodeCollapsed = collapsedIds.includes(parentNode.id);
+                // Only show snapshots that belong to this path AND this parent note
+                const childSnaps = snapsInPath.filter(s => s.parentNoteIds.includes(parentNode.id) && s.originPath === path);
                 
                 return (
-                  <div key={logicNote.id} className="ml-4 border-l border-border/30 pl-2 mt-1">
-                    {renderItem(logicNote)}
-                    {!isLogicCollapsed && (
+                  <div key={parentNode.id} className="ml-4 border-l border-border/30 pl-2 mt-1">
+                    {renderItem(parentNode)}
+                    {!isNodeCollapsed && (
                       <div className="mt-1">
                         {childSnaps.map(snap => (
                           <div key={snap.id} className="ml-4 border-l border-border/30 pl-2 mt-1">
@@ -359,7 +372,7 @@ export const Sidebar = ({
                   </div>
                 );
               })}
-              {orphanSnaps.map(snap => (
+              {orphanSnaps.filter(s => s.originPath === path).map(snap => (
                 <div key={snap.id} className="ml-4 border-l border-border/30 pl-2 mt-1">
                   {renderItem(snap)}
                 </div>
@@ -372,8 +385,33 @@ export const Sidebar = ({
   };
 
   const renderTree = (parentId: string | null) => {
+    const lensNoteIds = new Set(notes.filter(n => {
+      if (n.lens) return n.lens === activeLens;
+      // Fallback for notes without lens property
+      if (activeLens === 'Feature') return n.noteType !== 'Snapshot';
+      if (activeLens === 'Snapshot') return n.noteType === 'Snapshot';
+      return false;
+    }).map(n => n.id));
+
+    // 1. Get all notes that belong to this parent
     const children = notes.filter(n => {
-      if (parentId === null) return n.parentNoteIds.length === 0;
+      if (parentId === null) {
+        // Root level:
+        if (activeLens === 'Snapshot') {
+          return false; // Snapshot lens root is handled by renderSnapshotTree
+        }
+        
+        // For Domain/Module, only show if it matches the active lens and has no parent in the same lens
+        if (n.noteType === 'Domain' || n.noteType === 'Module') {
+          const matchesLens = n.lens ? n.lens === activeLens : activeLens === 'Feature';
+          if (!matchesLens) return false;
+          return !n.parentNoteIds.some(pid => lensNoteIds.has(pid));
+        }
+        
+        // For Logic/Snapshot, show if it has no parent in the active lens
+        return !n.parentNoteIds.some(pid => lensNoteIds.has(pid));
+      }
+      // For children, show all notes that have this parent
       return n.parentNoteIds.includes(parentId);
     });
 
@@ -401,12 +439,13 @@ export const Sidebar = ({
   return (
     <div className="w-full bg-card h-full flex flex-col relative border-r border-border">
       {/* Project Selector Header */}
-      <div className="p-5 border-b border-border flex justify-between items-center bg-card/80 backdrop-blur-sm z-10">
-        <div className="relative flex-1 flex items-center gap-2">
-          <button 
-            onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
-            className="flex items-center gap-2.5 font-bold text-foreground hover:bg-accent p-2 rounded-xl flex-1 text-left transition-all"
-          >
+      <div className="p-5 border-b border-border flex flex-col gap-3 bg-card/80 backdrop-blur-sm z-10">
+        <div className="flex justify-between items-center w-full">
+          <div className="relative flex-1 flex items-center gap-2">
+            <button 
+              onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
+              className="flex items-center gap-2.5 font-bold text-foreground hover:bg-accent p-2 rounded-xl flex-1 text-left transition-all"
+            >
             <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center text-primary glow-primary">
               <FolderGit2 size={18} />
             </div>
@@ -524,33 +563,47 @@ export const Sidebar = ({
         <button onClick={onClose} className="hidden sm:flex p-2 hover:bg-accent rounded-xl text-muted-foreground ml-2 transition-colors" title="Close Sidebar">
           <PanelLeftClose size={18} />
         </button>
+        </div>
+
+        {/* Lens Switcher */}
+        {selectedProjectId && (
+          <div className="flex bg-muted/50 p-1 rounded-xl border border-border w-full">
+            <button
+              onClick={() => setActiveLens('Feature')}
+              className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all ${activeLens === 'Feature' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              🎯 Feature
+            </button>
+            <button
+              onClick={() => setActiveLens('Snapshot')}
+              className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all ${activeLens === 'Snapshot' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              📸 Snap
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Action Bar */}
-      <div className="px-5 py-3 border-b border-border flex justify-between items-center bg-muted/20">
-        <div className="flex bg-muted/50 p-1 rounded-xl border border-border">
-          <button 
-            onClick={() => setViewMode('business')}
-            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
-              viewMode === 'business' 
-                ? 'bg-primary text-primary-foreground shadow-md shadow-primary/20' 
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Business
-          </button>
-          <button 
-            onClick={() => setViewMode('snapshot')}
-            className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
-              viewMode === 'snapshot' 
-                ? 'bg-primary text-primary-foreground shadow-md shadow-primary/20' 
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Snapshot
-          </button>
-        </div>
+      <div className="px-5 py-3 border-b border-border flex justify-end items-center bg-muted/20">
         <div className="flex gap-1.5">
+          <button 
+            onClick={handleExpandAll} 
+            className="p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground rounded-lg transition-all" 
+            title="Expand All"
+            disabled={!selectedProjectId}
+          >
+            <UnfoldVertical size={16} className={!selectedProjectId ? 'opacity-30' : ''} />
+          </button>
+          <button 
+            onClick={handleCollapseAll} 
+            className="p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground rounded-lg transition-all" 
+            title="Collapse All"
+            disabled={!selectedProjectId}
+          >
+            <FoldVertical size={16} className={!selectedProjectId ? 'opacity-30' : ''} />
+          </button>
+          <div className="w-px h-4 bg-border mx-1 self-center" />
           <button 
             onClick={() => { setSelectionMode(!selectionMode); setSelectedIds([]); setConfirmDelete(false); }} 
             className={`p-1.5 rounded-lg transition-all ${selectionMode ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/20' : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}
@@ -603,7 +656,7 @@ export const Sidebar = ({
           <div className="text-sm text-muted-foreground p-8 text-center opacity-50 italic">No notes yet. Create one!</div>
         ) : (
           <div className="space-y-1">
-            {viewMode === 'snapshot' ? renderSnapshotTree() : renderTree(null)}
+            {activeLens === 'Snapshot' ? renderSnapshotTree() : renderTree(null)}
           </div>
         )}
       </div>

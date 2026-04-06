@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { fetchRepoTree, fetchFileContent } from '../services/github';
-import { analyzeLogicUnit, translateToBusinessLogic, checkImplementationConflict, mapLogicsToModulesBulk, getEmbeddingsBulk, cosineSimilarity } from '../services/gemini';
+import { analyzeLogicUnit, translateToBusinessLogic, checkImplementationConflict, mapLogicsToModulesBulk, getEmbeddingsBulk, cosineSimilarity, generateModuleFromCluster, generateDomainsFromModules } from '../services/gemini';
+import { kMeansClustering } from '../lib/clustering';
 import { parseCodeToNodes } from '../services/astParser';
 import { db, auth } from '../firebase';
 import { collection, addDoc, serverTimestamp, query, where, getDocs, doc, setDoc, updateDoc, arrayUnion, getDoc, deleteDoc, writeBatch } from 'firebase/firestore';
-import { Note, SyncLedger, OperationType } from '../types';
+import { Note, SyncLedger, OperationType, LensType } from '../types';
 import { handleFirestoreError, computeHash } from '../lib/utils';
 import * as dbManager from '../services/dbManager';
-import { Github, RefreshCw, AlertCircle, PanelRightClose, X, Trash2, ChevronDown, Loader2 } from 'lucide-react';
+import { Github, RefreshCw, AlertCircle, PanelRightClose, X, Trash2, ChevronDown, Loader2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
-export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: () => void, projectId: string | null, onSyncComplete?: () => void }) => {
+export const GitHubSync = ({ onClose, projectId, onSyncComplete, activeLens, setActiveLens }: { onClose: () => void, projectId: string | null, onSyncComplete?: () => void, activeLens: LensType, setActiveLens: (lens: LensType) => void }) => {
   const [repoUrl, setRepoUrl] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -47,6 +48,8 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
     fetchProject();
   }, [projectId]);
 
+  const [isReconstructing, setIsReconstructing] = useState(false);
+
   const addLog = (msg: string) => {
     const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     setLogs(prev => [...prev, { msg, time }]);
@@ -70,6 +73,299 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
     addLog('Cancelling sync... Please wait for the current file to finish.');
   };
 
+  const handleAutoReconstruct = async () => {
+    if (!auth.currentUser || !projectId) return;
+    
+    let targetLens = activeLens;
+    if (activeLens === 'Snapshot') {
+      addLog('Switching to Feature lens for reconstruction...');
+      setActiveLens('Feature');
+      targetLens = 'Feature';
+    }
+    
+    setIsReconstructing(true);
+    cancelSyncRef.current = false;
+    setLogs([]);
+    addLog(`Starting Auto-Reconstruct for Lens: ${targetLens}...`);
+
+    try {
+      // 1. Fetch all Logic notes and existing structure for the active lens
+      const allLocalNotes = await dbManager.getAllNotes();
+      const logicNotes = allLocalNotes.filter(n => n.projectId === projectId && n.noteType === 'Logic');
+      const existingLensNotes = allLocalNotes.filter(n => 
+        n.projectId === projectId && 
+        (n.noteType === 'Domain' || n.noteType === 'Module') && 
+        n.lens === targetLens
+      );
+
+      if (logicNotes.length === 0) {
+        addLog('No Logic notes found to reconstruct.');
+        setIsReconstructing(false);
+        return;
+      }
+      addLog(`Found ${logicNotes.length} Logic notes. Generating Blueprint...`);
+
+      // 1.5 Delete existing Domains and Modules for this lens
+      if (existingLensNotes.length > 0) {
+        addLog(`Clearing ${existingLensNotes.length} existing Domains/Modules for Lens: ${activeLens}...`);
+        let deleteBatch = writeBatch(db);
+        let deleteCount = 0;
+        
+        for (const note of existingLensNotes) {
+          deleteBatch.delete(doc(db, 'notes', note.id));
+          await dbManager.deleteNote(note.id);
+          deleteCount++;
+          if (deleteCount >= 450) {
+            await deleteBatch.commit();
+            deleteBatch = writeBatch(db);
+            deleteCount = 0;
+          }
+        }
+        if (deleteCount > 0) await deleteBatch.commit();
+        
+        // Remove these deleted module IDs from all Logic notes' parentNoteIds
+        const deletedIds = new Set(existingLensNotes.map(n => n.id));
+        let updateBatch = writeBatch(db);
+        let updateCount = 0;
+        const updatedLogics: Note[] = [];
+        
+        for (const logic of logicNotes) {
+          if (logic.parentNoteIds && logic.parentNoteIds.some(id => deletedIds.has(id))) {
+            const newParentIds = logic.parentNoteIds.filter(id => !deletedIds.has(id));
+            updateBatch.update(doc(db, 'notes', logic.id), { parentNoteIds: newParentIds });
+            updatedLogics.push({ ...logic, parentNoteIds: newParentIds });
+            updateCount++;
+            if (updateCount >= 450) {
+              await updateBatch.commit();
+              updateBatch = writeBatch(db);
+              updateCount = 0;
+            }
+          }
+        }
+        if (updateCount > 0) await updateBatch.commit();
+        if (updatedLogics.length > 0) await dbManager.bulkSaveNotes(updatedLogics);
+        
+        // Update logicNotes array with the cleaned parentNoteIds
+        updatedLogics.forEach(ul => {
+          const idx = logicNotes.findIndex(l => l.id === ul.id);
+          if (idx !== -1) logicNotes[idx] = ul;
+        });
+      }
+
+      // 2. Ensure all Logic notes have embeddings
+      addLog(`Preparing embeddings for ${logicNotes.length} Logic notes...`);
+      let logicEmbeddings: number[][] = new Array(logicNotes.length).fill([]);
+      const textsToEmbed: string[] = [];
+      const indicesToEmbed: number[] = [];
+      
+      logicNotes.forEach((logic, idx) => {
+        if (logic.embedding && logic.embedding.length > 0) {
+          logicEmbeddings[idx] = logic.embedding;
+        } else {
+          textsToEmbed.push(`${logic.title} ${logic.summary}`);
+          indicesToEmbed.push(idx);
+        }
+      });
+
+      if (textsToEmbed.length > 0) {
+        addLog(`Fetching embeddings for ${textsToEmbed.length} notes...`);
+        const newEmbeddings = await getEmbeddingsBulk(textsToEmbed);
+        newEmbeddings.forEach((emb, i) => {
+          const originalIdx = indicesToEmbed[i];
+          logicEmbeddings[originalIdx] = emb;
+          // Also update the logic note in DB so we don't have to embed again
+          const logicRef = doc(db, 'notes', logicNotes[originalIdx].id);
+          updateDoc(logicRef, {
+            embedding: emb,
+            lastEmbeddedAt: serverTimestamp()
+          });
+        });
+      }
+
+      // 3. Cluster Logic notes using K-Means
+      const k = Math.max(1, Math.ceil(logicNotes.length / 5));
+      addLog(`Clustering ${logicNotes.length} logics into ${k} modules...`);
+      const assignments = kMeansClustering(logicEmbeddings, k);
+
+      // Group logics by cluster
+      const clusters: { [key: number]: Note[] } = {};
+      for (let i = 0; i < assignments.length; i++) {
+        const clusterId = assignments[i];
+        if (!clusters[clusterId]) clusters[clusterId] = [];
+        clusters[clusterId].push(logicNotes[i]);
+      }
+
+      // 4. Generate Module notes for each cluster
+      addLog(`Generating Module details using AI...`);
+      const generatedModules: { id: string, title: string, summary: string, body: string, logicIds: string[] }[] = [];
+      
+      const clusterPromises = Object.entries(clusters).map(async ([clusterId, logics], idx) => {
+        const logicsData = logics.map(l => ({ title: l.title, summary: l.summary }));
+        const moduleData = await generateModuleFromCluster(logicsData);
+        generatedModules.push({
+          id: `MOD_${idx}`,
+          ...moduleData,
+          logicIds: logics.map(l => l.id)
+        });
+      });
+
+      await Promise.all(clusterPromises);
+
+      // 5. Generate Domains from Modules
+      addLog(`Grouping ${generatedModules.length} Modules into Domains...`);
+      const modulesData = generatedModules.map(m => ({ id: m.id, title: m.title, summary: m.summary }));
+      const domainsBlueprint = await generateDomainsFromModules(modulesData);
+
+      if (!domainsBlueprint.domains || domainsBlueprint.domains.length === 0) {
+        throw new Error("Failed to generate domains blueprint.");
+      }
+      
+      // Ensure all modules are assigned to a domain (handle AI omissions)
+      const assignedModuleIds = new Set(domainsBlueprint.domains.flatMap(d => d.moduleIds || []));
+      const unassignedModules = generatedModules.filter(m => !assignedModuleIds.has(m.id));
+      
+      if (unassignedModules.length > 0) {
+        domainsBlueprint.domains.push({
+          title: "기타 기능 및 유틸리티",
+          summary: "특정 도메인에 분류되지 않은 나머지 기능 모듈들입니다.",
+          moduleIds: unassignedModules.map(m => m.id)
+        });
+      }
+
+      addLog(`Blueprint generated with ${domainsBlueprint.domains.length} Domains.`);
+
+      // 6. Create Domains and Modules in Firestore
+      let batch = writeBatch(db);
+      let batchCount = 0;
+      let localNotesBatch: Note[] = [];
+
+      const commitBatch = async () => {
+        if (batchCount > 0) {
+          try {
+            if (localNotesBatch.length > 0) {
+              const localNotes = localNotesBatch.map(note => ({
+                ...note,
+                lastUpdated: new Date().toISOString(),
+                lastEmbeddedAt: note.lastEmbeddedAt ? new Date().toISOString() : undefined
+              }));
+              await dbManager.bulkSaveNotes(localNotes as Note[]);
+            }
+            await batch.commit();
+          } finally {
+            batch = writeBatch(db);
+            batchCount = 0;
+            localNotesBatch = [];
+          }
+        }
+      };
+
+      for (const domainData of domainsBlueprint.domains) {
+        const domainRef = doc(collection(db, 'notes'));
+        const domainId = domainRef.id;
+        
+        const domainNote: Note = {
+          id: domainId,
+          title: domainData.title.substring(0, 200),
+          projectId,
+          summary: domainData.summary || '',
+          body: '',
+          folder: '',
+          noteType: 'Domain',
+          status: 'Planned',
+          priority: 'C',
+          parentNoteIds: [],
+          childNoteIds: [],
+          relatedNoteIds: [],
+          uid: auth.currentUser.uid,
+          lastUpdated: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          lens: 'Feature'
+        };
+
+        batch.set(domainRef, domainNote);
+        localNotesBatch.push(domainNote);
+        batchCount++;
+
+        if (domainData.moduleIds) {
+          for (const moduleIdKey of domainData.moduleIds) {
+            const moduleData = generatedModules.find(m => m.id === moduleIdKey);
+            if (!moduleData) continue;
+
+            const moduleRef = doc(collection(db, 'notes'));
+            const moduleId = moduleRef.id;
+            
+            const [moduleEmbedding] = await getEmbeddingsBulk([`${moduleData.title} ${moduleData.summary || ''}`]);
+            
+            const moduleNote: Note = {
+              id: moduleId,
+              title: moduleData.title.substring(0, 200),
+              projectId,
+              summary: moduleData.summary || '',
+              body: moduleData.body || '',
+              folder: '',
+              noteType: 'Module',
+              status: 'Planned',
+              priority: 'C',
+              parentNoteIds: [domainId],
+              childNoteIds: moduleData.logicIds, // Map logics to this module
+              relatedNoteIds: [],
+              uid: auth.currentUser.uid,
+              lastUpdated: serverTimestamp(),
+              createdAt: serverTimestamp(),
+              embeddingHash: await computeHash(`${moduleData.title} ${moduleData.summary || ''}`),
+              embeddingModel: 'gemini-embedding-2-preview',
+              lastEmbeddedAt: serverTimestamp(),
+              embedding: moduleEmbedding,
+              lens: 'Feature'
+            };
+
+            batch.set(moduleRef, moduleNote);
+            localNotesBatch.push(moduleNote);
+            batchCount++;
+            
+            // Update Domain's childNoteIds
+            domainNote.childNoteIds.push(moduleId);
+            batch.update(domainRef, { childNoteIds: arrayUnion(moduleId) });
+            batchCount++;
+
+            // Update Logics to point to this Module in Firestore and Local Batch
+            for (const logicId of moduleData.logicIds) {
+              const logicRef = doc(db, 'notes', logicId);
+              batch.update(logicRef, {
+                parentNoteIds: arrayUnion(moduleId),
+                lastUpdated: serverTimestamp()
+              });
+              batchCount++;
+
+              // Update local note object for IndexedDB
+              const logicIdx = logicNotes.findIndex(l => l.id === logicId);
+              if (logicIdx !== -1) {
+                const updatedLogic = {
+                  ...logicNotes[logicIdx],
+                  parentNoteIds: [...(logicNotes[logicIdx].parentNoteIds || []), moduleId]
+                };
+                logicNotes[logicIdx] = updatedLogic;
+                localNotesBatch.push(updatedLogic);
+              }
+            }
+            
+            if (batchCount >= 400) await commitBatch();
+          }
+        }
+      }
+      await commitBatch();
+
+      addLog(`Auto-Reconstruct complete!`);
+      if (onSyncComplete) onSyncComplete();
+
+    } catch (error) {
+      addLog(`Auto-Reconstruct failed: ${error}`);
+      handleFirestoreError(error, OperationType.UPDATE, 'notes');
+    } finally {
+      setIsReconstructing(false);
+    }
+  };
+
   const executeReset = async () => {
     if (!projectId || !auth.currentUser) return;
     setResetting(true);
@@ -85,7 +381,6 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
       );
       const snapshotDocs = await getDocs(snapshotQuery);
       
-      // Use batch for deletion
       let batch = writeBatch(db);
       let count = 0;
       for (const d of snapshotDocs.docs) {
@@ -101,7 +396,7 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
       
       addLog(`Deleted ${snapshotDocs.docs.length} snapshots.`);
 
-      // 1.5 Clear childNoteIds from all Logic notes
+      // 2. Clear child references from all Logic notes (Snapshots are children)
       const logicQuery = query(
         collection(db, 'notes'),
         where('uid', '==', auth.currentUser.uid),
@@ -112,7 +407,9 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
       batch = writeBatch(db);
       count = 0;
       for (const d of logicDocs.docs) {
-        batch.update(doc(db, 'notes', d.id), { childNoteIds: [] });
+        batch.update(doc(db, 'notes', d.id), { 
+          childNoteIds: [] 
+        });
         count++;
         if (count >= 450) {
           await batch.commit();
@@ -122,20 +419,30 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
       }
       if (count > 0) await batch.commit();
       
-      // Also clear from local DB
+      // 3. Sync with local DB (IndexedDB)
       const allLocalNotes = await dbManager.getAllNotes();
-      const localSnapshots = allLocalNotes.filter(n => n.projectId === projectId && n.noteType === 'Snapshot');
-      for (const snap of localSnapshots) {
-        await dbManager.deleteNote(snap.id);
+      const localSnapshots = allLocalNotes.filter(n => 
+        n.projectId === projectId && 
+        n.noteType === 'Snapshot'
+      );
+      
+      for (const note of localSnapshots) {
+        await dbManager.deleteNote(note.id);
       }
+      
       const localLogics = allLocalNotes.filter(n => n.projectId === projectId && n.noteType === 'Logic');
-      const updatedLogics = localLogics.map(l => ({ ...l, childNoteIds: [] }));
+      const updatedLogics = localLogics.map(l => ({ 
+        ...l, 
+        childNoteIds: [] 
+      }));
+      
       if (updatedLogics.length > 0) {
         await dbManager.bulkSaveNotes(updatedLogics);
       }
-      addLog(`Cleared child references from ${logicDocs.docs.length} logic notes.`);
+      
+      addLog(`Cleared snapshot references from ${logicDocs.docs.length} logic notes.`);
 
-      // 2. Reset Sync Ledger
+      // 4. Reset Sync Ledger
       const ledgerQuery = query(
         collection(db, 'syncLedgers'),
         where('uid', '==', auth.currentUser.uid),
@@ -149,9 +456,11 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
         });
       }
       addLog('Sync ledger reset successfully.');
+      
+      if (onSyncComplete) onSyncComplete();
     } catch (error) {
       addLog(`Reset failed: ${error}`);
-      handleFirestoreError(error, OperationType.DELETE, 'notes/snapshots');
+      handleFirestoreError(error, OperationType.DELETE, 'notes/reset');
     } finally {
       setResetting(false);
     }
@@ -181,6 +490,7 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
             }));
             await dbManager.bulkSaveNotes(localNotes as Note[]);
           }
+          await batch.commit();
         } finally {
           // Always reset batch to avoid "batch already committed" errors even if commit fails
           batch = writeBatch(db);
@@ -256,9 +566,35 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
           newEmbeddings.forEach((emb, i) => {
             const originalIdx = indicesToEmbed[i];
             existingLogicEmbeddings[originalIdx] = emb;
-            
-            // We should ideally save this back to Firestore, but for now we just use it in memory
-            // to avoid slowing down the initial sync setup too much. It will be saved if the note is updated.
+          });
+        }
+      }
+
+      // Fetch existing Modules for the current lens to enable auto-mapping of new Logic notes
+      addLog(`Fetching existing Modules for Lens: ${activeLens}...`);
+      const existingModules = allNotes.filter(n => n.noteType === 'Module' && n.lens === activeLens);
+      let moduleEmbeddings: number[][] = [];
+      
+      if (existingModules.length > 0) {
+        const moduleTexts: string[] = [];
+        const moduleIndices: number[] = [];
+        moduleEmbeddings = new Array(existingModules.length).fill([]);
+        
+        existingModules.forEach((m, idx) => {
+          if (m.embedding && m.embedding.length > 0) {
+            moduleEmbeddings[idx] = m.embedding;
+          } else {
+            moduleTexts.push(`${m.title} ${m.summary}`);
+            moduleIndices.push(idx);
+          }
+        });
+        
+        if (moduleTexts.length > 0) {
+          addLog(`Calculating embeddings for ${moduleTexts.length} Modules...`);
+          const newModuleEmbeddings = await getEmbeddingsBulk(moduleTexts);
+          newModuleEmbeddings.forEach((emb, i) => {
+            const originalIdx = moduleIndices[i];
+            moduleEmbeddings[originalIdx] = emb;
           });
         }
       }
@@ -303,78 +639,69 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
 
           // Phase 2: AI Deep Analysis (IPO Model)
           addLog(`  Phase 2: AI Deep Analysis...`);
-          const BATCH_SIZE = 3;
-          for (let i = 0; i < fileLogicUnits.length; i += BATCH_SIZE) {
+          for (const item of fileLogicUnits) {
             if (cancelSyncRef.current) break;
-            const batchUnits = fileLogicUnits.slice(i, i + BATCH_SIZE);
-
-            await Promise.all(batchUnits.map(async (item) => {
-              const { unit, file, unitHash } = item;
-              const cachedNote = allNotes.find(n => n.noteType === 'Snapshot' && n.contentHash === unitHash && n.originPath === file.path);
-              
-              if (cachedNote) {
-                addLog(`    Cache Hit: Skipping AI analysis for ${unit.title}`);
-                const parentLogic = allNotes.find(n => n.noteType === 'Logic' && n.childNoteIds.includes(cachedNote.id));
-                if (parentLogic) {
-                  item.isCacheHit = true;
-                  item.cachedNote = cachedNote;
-                  item.parentLogic = parentLogic;
-                  item.businessLogic = {
-                    title: parentLogic.title,
-                    summary: parentLogic.summary,
-                    components: parentLogic.components,
-                    flow: parentLogic.flow,
-                    io: parentLogic.io
-                  };
-                  item.analysis = {
-                    title: cachedNote.title,
-                    summary: cachedNote.summary,
-                    components: cachedNote.components,
-                    flow: cachedNote.flow,
-                    io: cachedNote.io
-                  };
-                  item.caseType = '4-1';
-                  item.targetLogicB = parentLogic;
-                  item.targetSnapshotB = cachedNote;
-                  item.isConflict = parentLogic.status === 'Conflict';
-                  item.conflictDetails = parentLogic.conflictDetails;
-                  item.logicAEmbedding = null;
-                  item.logicHash = parentLogic.embeddingHash || null;
-                }
+            
+            const { unit, file, unitHash } = item;
+            const cachedNote = allNotes.find(n => n.noteType === 'Snapshot' && n.contentHash === unitHash && n.originPath === file.path);
+            
+            if (cachedNote) {
+              addLog(`    Cache Hit: Skipping AI analysis for ${unit.title}`);
+              const parentLogic = allNotes.find(n => n.noteType === 'Logic' && n.childNoteIds.includes(cachedNote.id));
+              if (parentLogic) {
+                item.isCacheHit = true;
+                item.cachedNote = cachedNote;
+                item.parentLogic = parentLogic;
+                item.businessLogic = {
+                  title: parentLogic.title,
+                  summary: parentLogic.summary,
+                  components: parentLogic.components,
+                  flow: parentLogic.flow,
+                  io: parentLogic.io
+                };
+                item.analysis = {
+                  title: cachedNote.title,
+                  summary: cachedNote.summary,
+                  components: cachedNote.components,
+                  flow: cachedNote.flow,
+                  io: cachedNote.io
+                };
+                item.caseType = '4-1';
+                item.targetLogicB = parentLogic;
+                item.targetSnapshotB = cachedNote;
+                item.isConflict = parentLogic.status === 'Conflict';
+                item.conflictDetails = parentLogic.conflictDetails;
+                item.logicAEmbedding = null;
+                item.logicHash = parentLogic.embeddingHash || null;
               }
+            }
 
-              if (!item.isCacheHit) {
-                try {
-                  addLog(`    Analyzing: ${unit.title}`);
-                  item.analysis = await analyzeLogicUnit(unit.title, unit.code);
-                } catch (err) {
-                  addLog(`    Error analyzing ${unit.title}: ${err}`);
-                  item.error = true;
-                }
+            if (!item.isCacheHit) {
+              try {
+                addLog(`    Analyzing: ${unit.title}`);
+                item.analysis = await analyzeLogicUnit(unit.title, unit.code);
+              } catch (err) {
+                addLog(`    Error analyzing ${unit.title}: ${err}`);
+                item.error = true;
               }
-            }));
-            await new Promise(resolve => setTimeout(resolve, 500));
+            }
           }
 
           if (cancelSyncRef.current) break;
 
           // Phase 3: Generating Business Logic
           addLog(`  Phase 3: Generating Business Logic...`);
-          for (let i = 0; i < fileLogicUnits.length; i += BATCH_SIZE) {
+          for (const item of fileLogicUnits) {
             if (cancelSyncRef.current) break;
-            const batchUnits = fileLogicUnits.slice(i, i + BATCH_SIZE).filter(item => !item.isCacheHit && !item.error);
             
-            if (batchUnits.length > 0) {
-              await Promise.all(batchUnits.map(async (item) => {
-                try {
-                  addLog(`    Translating: ${item.unit.title}`);
-                  item.businessLogic = await translateToBusinessLogic({ title: item.unit.title, ...item.analysis });
-                } catch (err) {
-                  addLog(`    Error translating ${item.unit.title}: ${err}`);
-                  item.error = true;
-                }
-              }));
-              await new Promise(resolve => setTimeout(resolve, 500));
+            if (!item.isCacheHit && !item.error) {
+              try {
+                addLog(`    Translating: ${item.unit.title}`);
+                item.businessLogic = await translateToBusinessLogic({ title: item.unit.title, ...item.analysis });
+              } catch (err) {
+                addLog(`    Error translating ${item.unit.title}: ${err}`);
+                item.error = true;
+              }
             }
           }
 
@@ -427,74 +754,68 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
           if (cancelSyncRef.current) break;
 
           // Similarity matching
-          for (let i = 0; i < unitsToEmbed.length; i += BATCH_SIZE) {
+          for (const item of unitsToEmbed) {
             if (cancelSyncRef.current) break;
-            const batchUnits = unitsToEmbed.slice(i, i + BATCH_SIZE).filter(item => !item.error && item.logicAEmbedding);
-            
-            if (batchUnits.length > 0) {
-              for (const item of batchUnits) {
-                if (cancelSyncRef.current) break;
+            if (item.error || !item.logicAEmbedding) continue;
 
-                let bestMatchLogicB = null;
-                let highestSimilarity = -1;
+            let bestMatchLogicB = null;
+            let highestSimilarity = -1;
 
-                for (let j = 0; j < existingLogicNotes.length; j++) {
-                  const sim = cosineSimilarity(item.logicAEmbedding, existingLogicEmbeddings[j]);
-                  if (sim > highestSimilarity) {
-                    highestSimilarity = sim;
-                    bestMatchLogicB = existingLogicNotes[j];
-                  }
-                }
-
-                const SIMILARITY_THRESHOLD = similarityThreshold;
-                item.caseType = '4-3';
-                item.targetLogicB = null;
-                item.targetSnapshotB = null;
-                item.isConflict = false;
-                item.conflictDetails = undefined;
-
-                if (bestMatchLogicB && highestSimilarity >= SIMILARITY_THRESHOLD) {
-                  const childSnapshots = allNotes.filter(n => n.noteType === 'Snapshot' && bestMatchLogicB.childNoteIds.includes(n.id));
-                  const isAlreadyClaimed = claimedEmptyLogics.has(bestMatchLogicB.id);
-                  
-                  if (childSnapshots.length > 0 || isAlreadyClaimed) {
-                    const existingSnapshotForThisFile = childSnapshots.find(s => s.originPath === item.file.path);
-                    
-                    if (existingSnapshotForThisFile && !isAlreadyClaimed) {
-                      item.caseType = '4-1';
-                      item.targetLogicB = bestMatchLogicB;
-                      item.targetSnapshotB = existingSnapshotForThisFile;
-                      addLog(`    [Queue] Matched existing logic '${bestMatchLogicB.title}' (4-1).`);
-                    } else {
-                      item.caseType = '4-3';
-                      item.targetLogicB = null;
-                      item.targetSnapshotB = null;
-                      addLog(`    [Queue] Room '${bestMatchLogicB.title}' is already occupied! Creating new room (4-3).`);
-                    }
-                  } else {
-                    item.caseType = '4-2';
-                    item.targetLogicB = bestMatchLogicB;
-                    claimedEmptyLogics.add(bestMatchLogicB.id);
-                    addLog(`    [Queue] Claimed empty room '${bestMatchLogicB.title}' (4-2).`);
-                  }
-                  
-                  if (item.caseType !== '4-3') {
-                    try {
-                      const conflictResult = await checkImplementationConflict(item.businessLogic, item.targetLogicB);
-                      item.isConflict = conflictResult.isConflict;
-                      item.conflictDetails = conflictResult.conflictDetails;
-                    } catch (err) {
-                      addLog(`    Error checking conflict for ${item.businessLogic.title}: ${err}`);
-                    }
-                  }
-                } else {
-                  addLog(`    [Queue] No match found. Creating new room (4-3).`);
-                }
-
-                // Add a 1-second delay to simulate queueing and prevent race conditions visually
-                await new Promise(resolve => setTimeout(resolve, 1000));
+            for (let j = 0; j < existingLogicNotes.length; j++) {
+              const sim = cosineSimilarity(item.logicAEmbedding, existingLogicEmbeddings[j]);
+              if (sim > highestSimilarity) {
+                highestSimilarity = sim;
+                bestMatchLogicB = existingLogicNotes[j];
               }
             }
+
+            const SIMILARITY_THRESHOLD = similarityThreshold;
+            item.caseType = '4-3';
+            item.targetLogicB = null;
+            item.targetSnapshotB = null;
+            item.isConflict = false;
+            item.conflictDetails = undefined;
+
+            if (bestMatchLogicB && highestSimilarity >= SIMILARITY_THRESHOLD) {
+              const childSnapshots = allNotes.filter(n => n.noteType === 'Snapshot' && bestMatchLogicB.childNoteIds.includes(n.id));
+              const isAlreadyClaimed = claimedEmptyLogics.has(bestMatchLogicB.id);
+              
+              if (childSnapshots.length > 0 || isAlreadyClaimed) {
+                const existingSnapshotForThisFile = childSnapshots.find(s => s.originPath === item.file.path);
+                
+                if (existingSnapshotForThisFile && !isAlreadyClaimed) {
+                  item.caseType = '4-1';
+                  item.targetLogicB = bestMatchLogicB;
+                  item.targetSnapshotB = existingSnapshotForThisFile;
+                  addLog(`    [Queue] Matched existing logic '${bestMatchLogicB.title}' (4-1).`);
+                } else {
+                  item.caseType = '4-3';
+                  item.targetLogicB = null;
+                  item.targetSnapshotB = null;
+                  addLog(`    [Queue] Room '${bestMatchLogicB.title}' is already occupied! Creating new room (4-3).`);
+                }
+              } else {
+                item.caseType = '4-2';
+                item.targetLogicB = bestMatchLogicB;
+                claimedEmptyLogics.add(bestMatchLogicB.id);
+                addLog(`    [Queue] Claimed empty room '${bestMatchLogicB.title}' (4-2).`);
+              }
+              
+              if (item.caseType !== '4-3') {
+                try {
+                  const conflictResult = await checkImplementationConflict(item.businessLogic, item.targetLogicB);
+                  item.isConflict = conflictResult.isConflict;
+                  item.conflictDetails = conflictResult.conflictDetails;
+                } catch (err) {
+                  addLog(`    Error checking conflict for ${item.businessLogic.title}: ${err}`);
+                }
+              }
+            } else {
+              addLog(`    [Queue] No match found. Creating new room (4-3).`);
+            }
+
+            // Add a 1-second delay to simulate queueing and prevent race conditions visually
+            await new Promise(resolve => setTimeout(resolve, 1000));
           }
 
           if (cancelSyncRef.current) break;
@@ -515,6 +836,8 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
                 status: isConflict ? 'Conflict' : 'Done',
                 lastUpdated: serverTimestamp(),
                 uid: auth.currentUser.uid,
+                sha: currentFile.sha,
+                lens: 'Feature',
                 ...(conflictDetails ? { conflictDetails } : {}),
                 ...(unitHash ? { contentHash: unitHash } : {}),
                 ...(logicAEmbedding ? { embedding: logicAEmbedding } : {}),
@@ -540,6 +863,7 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
                 lastUpdated: serverTimestamp(),
                 sha: currentFile.sha,
                 uid: auth.currentUser.uid,
+                lens: 'Snapshot',
                 ...(unitHash ? { contentHash: unitHash } : {})
               };
               
@@ -563,6 +887,8 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
                 status: isConflict ? 'Conflict' : 'Done',
                 lastUpdated: serverTimestamp(),
                 uid: auth.currentUser.uid,
+                sha: currentFile.sha,
+                lens: 'Feature',
                 ...(conflictDetails ? { conflictDetails } : {}),
                 ...(unitHash ? { contentHash: unitHash } : {}),
                 ...(logicAEmbedding ? { embedding: logicAEmbedding } : {}),
@@ -599,6 +925,7 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
                 sha: currentFile.sha,
                 uid: auth.currentUser.uid,
                 lastUpdated: serverTimestamp(),
+                lens: 'Snapshot',
                 ...(unitHash ? { contentHash: unitHash } : {})
               };
               batch.set(snapshotRef, snapshotData);
@@ -610,6 +937,25 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
               const logicRef = doc(collection(db, 'notes'));
               const logicId = logicRef.id;
               
+              // Find best matching module for the new logic note
+              let parentModuleIds: string[] = [];
+              if (moduleEmbeddings.length > 0 && logicAEmbedding) {
+                let bestModule = null;
+                let maxSim = -1;
+                for (let j = 0; j < existingModules.length; j++) {
+                  const sim = cosineSimilarity(logicAEmbedding, moduleEmbeddings[j]);
+                  if (sim > maxSim) {
+                    maxSim = sim;
+                    bestModule = existingModules[j];
+                  }
+                }
+                // Use a threshold for module mapping during sync as well
+                if (bestModule && maxSim >= 0.7) {
+                  parentModuleIds = [bestModule.id];
+                  addLog(`    [Auto-Map] Assigned new logic '${businessLogic.title}' to module '${bestModule.title}' (sim: ${maxSim.toFixed(2)})`);
+                }
+              }
+
               const logicData: Partial<Note> = {
                 id: logicId,
                 title: businessLogic.title.substring(0, 200),
@@ -623,11 +969,13 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
                 noteType: 'Logic',
                 status: 'Done',
                 priority: 'C',
-                parentNoteIds: [],
+                parentNoteIds: parentModuleIds,
                 childNoteIds: [snapshotId],
                 relatedNoteIds: [],
                 uid: auth.currentUser.uid,
                 lastUpdated: serverTimestamp(),
+                sha: currentFile.sha,
+                lens: 'Feature',
                 ...(unitHash ? { contentHash: unitHash } : {}),
                 ...(logicAEmbedding ? { embedding: logicAEmbedding } : {}),
                 ...(logicHash ? { embeddingHash: logicHash } : {}),
@@ -637,6 +985,24 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
               batch.set(logicRef, logicData);
               batchCount++;
               localNotesBatch.push(logicData as Note);
+
+              // If we assigned a parent module, we need to update the module's childNoteIds
+              if (parentModuleIds.length > 0) {
+                const moduleRef = doc(db, 'notes', parentModuleIds[0]);
+                batch.update(moduleRef, {
+                  childNoteIds: arrayUnion(logicId),
+                  lastUpdated: serverTimestamp()
+                });
+                batchCount++;
+                // Update local module as well
+                const mod = existingModules.find(m => m.id === parentModuleIds[0]);
+                if (mod) {
+                  localNotesBatch.push({
+                    ...mod,
+                    childNoteIds: [...(mod.childNoteIds || []), logicId]
+                  } as Note);
+                }
+              }
               
               const snapshotData: Partial<Note> = {
                 id: snapshotId,
@@ -658,6 +1024,7 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
                 sha: currentFile.sha,
                 uid: auth.currentUser.uid,
                 lastUpdated: serverTimestamp(),
+                lens: 'Snapshot',
                 ...(unitHash ? { contentHash: unitHash } : {})
               };
               batch.set(snapshotRef, snapshotData);
@@ -742,6 +1109,7 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
             }));
             await dbManager.bulkSaveNotes(localNotes as Note[]);
           }
+          await batch.commit();
         } finally {
           batch = writeBatch(db);
           batchCount = 0;
@@ -751,26 +1119,29 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
     };
 
     try {
-      // Fetch all unassigned Logic notes from Local DB
+      // Fetch existing Module notes from Local DB for the ACTIVE LENS
       const allLocalNotes = await dbManager.getAllNotes();
-      const unassignedLogics = allLocalNotes.filter(n => 
+      const existingModules = allLocalNotes.filter(n => 
         n.projectId === projectId && 
-        n.noteType === 'Logic' && 
-        (!n.parentNoteIds || n.parentNoteIds.length === 0)
+        n.noteType === 'Module' &&
+        n.lens === activeLens
       );
+      const existingModuleIdsForLens = new Set(existingModules.map(m => m.id));
+
+      // Fetch all unassigned Logic notes from Local DB (unassigned for the current lens)
+      const unassignedLogics = allLocalNotes.filter(n => {
+        if (n.projectId !== projectId || n.noteType !== 'Logic') return false;
+        // Check if it has any parent that is a module in the current lens
+        const hasParentInLens = n.parentNoteIds?.some(pid => existingModuleIdsForLens.has(pid));
+        return !hasParentInLens;
+      });
 
       if (unassignedLogics.length === 0) {
-        addLog('No unassigned Logic notes found. Everything is mapped!');
+        addLog(`No unassigned Logic notes found for Lens: ${activeLens}. Everything is mapped!`);
         setIsMapping(false);
         return;
       }
-      addLog(`Found ${unassignedLogics.length} unassigned Logic notes.`);
-
-      // Fetch existing Module notes from Local DB
-      const existingModules = allLocalNotes.filter(n => 
-        n.projectId === projectId && 
-        n.noteType === 'Module'
-      );
+      addLog(`Found ${unassignedLogics.length} unassigned Logic notes for Lens: ${activeLens}.`);
 
       let moduleEmbeddings: number[][] = [];
       if (existingModules.length > 0) {
@@ -905,7 +1276,8 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
                 embeddingHash: await computeHash(`${mapping.suggestedTitle} ${mapping.suggestedSummary || ''}`),
                 embeddingModel: 'gemini-embedding-2-preview',
                 lastEmbeddedAt: serverTimestamp(),
-                embedding: newModuleEmbedding
+                embedding: newModuleEmbedding,
+                lens: 'Feature'
               };
               
               existingModules.push(newModuleData as Note);
@@ -1131,43 +1503,57 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete }: { onClose: ()
               )}
             </div>
 
-            <div className="grid grid-cols-3 gap-2 sm:gap-4">
+            <div className="flex flex-col gap-2 sm:gap-4">
               {syncing || isMapping ? (
                 <button 
                   onClick={handleCancelSync}
-                  className="col-span-3 flex justify-center items-center gap-3 px-4 py-3 sm:py-4 bg-destructive text-destructive-foreground rounded-xl sm:rounded-2xl hover:opacity-90 text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-destructive/20 transition-all active:scale-95"
+                  className="w-full flex justify-center items-center gap-3 px-4 py-3 sm:py-4 bg-destructive text-destructive-foreground rounded-xl sm:rounded-2xl hover:opacity-90 text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-destructive/20 transition-all active:scale-95"
                 >
                   <X size={16} /> Abort
                 </button>
               ) : (
                 <>
-                  <button 
-                    onClick={handleSync}
-                    disabled={!repoUrl || resetting}
-                    className="flex justify-center items-center gap-3 px-4 py-3 sm:py-4 bg-primary text-primary-foreground rounded-xl sm:rounded-2xl hover:opacity-90 disabled:opacity-50 text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-primary/20 transition-all active:scale-95 glow-primary"
-                  >
-                    <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} /> Sync
-                  </button>
+                  {/* Top Row: Sync & Reset */}
+                  <div className="grid grid-cols-2 gap-2 sm:gap-4">
+                    <button 
+                      onClick={handleSync}
+                      disabled={!repoUrl || resetting}
+                      className="flex justify-center items-center gap-3 px-4 py-3 sm:py-4 bg-primary text-primary-foreground rounded-xl sm:rounded-2xl hover:opacity-90 disabled:opacity-50 text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-primary/20 transition-all active:scale-95 glow-primary"
+                    >
+                      <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} /> Sync
+                    </button>
 
-                  <button 
-                    onClick={handleModuleMapping}
-                    disabled={syncing || resetting || isMapping}
-                    className="flex justify-center items-center gap-3 px-4 py-3 sm:py-4 bg-secondary text-secondary-foreground rounded-xl sm:rounded-2xl hover:opacity-90 disabled:opacity-50 text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-secondary/20 transition-all active:scale-95"
-                  >
-                    <RefreshCw size={16} className={isMapping ? 'animate-spin' : ''} /> {isMapping ? 'Mapping' : 'Auto-Map'}
-                  </button>
-                  
-                  <button 
-                    onClick={() => confirmReset ? executeReset() : setConfirmReset(true)}
-                    disabled={syncing || resetting || isMapping}
-                    className={`flex justify-center items-center gap-3 px-4 py-3 sm:py-4 rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 border ${
-                      confirmReset 
-                        ? 'bg-destructive text-destructive-foreground shadow-xl shadow-destructive/20 border-transparent' 
-                        : 'bg-muted/30 text-muted-foreground hover:bg-destructive/10 hover:text-destructive border-border/50'
-                    } disabled:opacity-50`}
-                  >
-                    <Trash2 size={16} /> {confirmReset ? 'Confirm' : 'Reset'}
-                  </button>
+                    <button 
+                      onClick={() => confirmReset ? executeReset() : setConfirmReset(true)}
+                      disabled={syncing || resetting || isMapping || isReconstructing}
+                      className={`flex justify-center items-center gap-3 px-4 py-3 sm:py-4 rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 border ${
+                        confirmReset 
+                          ? 'bg-destructive text-destructive-foreground shadow-xl shadow-destructive/20 border-transparent' 
+                          : 'bg-muted/30 text-muted-foreground hover:bg-destructive/10 hover:text-destructive border-border/50'
+                      } disabled:opacity-50`}
+                    >
+                      <Trash2 size={16} /> {confirmReset ? 'Confirm' : 'Reset'}
+                    </button>
+                  </div>
+
+                  {/* Bottom Row: Reconstruct & Auto-Map */}
+                  <div className="grid grid-cols-2 gap-2 sm:gap-4">
+                    <button 
+                      onClick={handleAutoReconstruct}
+                      disabled={syncing || resetting || isMapping || isReconstructing}
+                      className="flex justify-center items-center gap-3 px-4 py-3 sm:py-4 bg-primary text-primary-foreground rounded-xl sm:rounded-2xl hover:opacity-90 disabled:opacity-50 text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-primary/20 transition-all active:scale-95"
+                    >
+                      <Sparkles size={16} className={isReconstructing ? 'animate-pulse' : ''} /> {isReconstructing ? 'Reconstructing' : `Reconstruct`}
+                    </button>
+
+                    <button 
+                      onClick={handleModuleMapping}
+                      disabled={syncing || resetting || isMapping || isReconstructing}
+                      className="flex justify-center items-center gap-3 px-4 py-3 sm:py-4 bg-secondary text-secondary-foreground rounded-xl sm:rounded-2xl hover:opacity-90 disabled:opacity-50 text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-secondary/20 transition-all active:scale-95"
+                    >
+                      <RefreshCw size={16} className={isMapping ? 'animate-spin' : ''} /> {isMapping ? 'Mapping' : 'Auto-Map'}
+                    </button>
+                  </div>
                 </>
               )}
             </div>

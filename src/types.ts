@@ -1,6 +1,7 @@
 export type NoteType = 'Domain' | 'Module' | 'Logic' | 'Snapshot';
 export type NoteStatus = 'Planned' | 'Done' | 'Conflict';
 export type NotePriority = 'P1' | 'P2' | 'P3' | 'A' | 'B' | 'C' | 'Done';
+export type LensType = 'Feature' | 'Snapshot';
 
 export interface ConflictDetail {
   aspect: string;
@@ -54,7 +55,8 @@ export interface CompetitorAnalysis {
 
 export interface ProactiveNudge {
   id: string;
-  nudgeType: 'WhatIf' | 'Gap' | 'Constraint' | 'Inversion';
+  nudgeType: 'WhatIf' | 'Gap' | 'Constraint' | 'Inversion' | 'NextStep' | 'MissingPiece' | 'Growth' | 'EdgeCase';
+  track: 'A' | 'B';
   context: string;
   question: string;
   keywords: string[];
@@ -85,6 +87,7 @@ export interface Note {
   embeddingHash?: string;
   embeddingModel?: string;
   lastEmbeddedAt?: any; // Firestore Timestamp
+  lens?: LensType;
   uid: string;
   createdAt: any; // Firestore Timestamp
   conflictDetails?: ConflictDetails;

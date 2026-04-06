@@ -1,13 +1,13 @@
 import React from 'react';
 import { Note, ProactiveNudge } from '../../types';
-import { Target, Receipt, Presentation, Swords, Sparkles, MessageSquarePlus, ChevronRight, Loader2, CheckCircle2, AlertCircle, CircleDashed, Clock, RefreshCw, X } from 'lucide-react';
+import { Target, Receipt, Presentation, Swords, Sparkles, MessageSquarePlus, ChevronRight, Loader2, CheckCircle2, AlertCircle, CircleDashed, Clock, RefreshCw, X, Wrench, Lightbulb } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface BentoViewProps {
   notes: Note[];
   nudges: ProactiveNudge[];
   isFetchingNudges: boolean;
-  loadingNudgeTypes: ('WhatIf' | 'Gap' | 'Constraint' | 'Inversion')[];
+  loadingNudgeTypes: ('WhatIf' | 'Gap' | 'Constraint' | 'Inversion' | 'NextStep' | 'MissingPiece' | 'Growth' | 'EdgeCase')[];
   onAcceptNudge: (nudge: ProactiveNudge) => void;
   onSparringSubmit: (nudge: ProactiveNudge, response: string) => void;
   onRejectNudge: (nudgeId: string) => void;
@@ -114,99 +114,219 @@ export const BentoView: React.FC<BentoViewProps> = ({
                 </p>
               </div>
             ) : nudges.length > 0 || loadingNudgeTypes.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {nudges.map(nudge => (
-                  <div key={nudge.id} className="bg-background/80 backdrop-blur-sm border border-border rounded-2xl p-5 shadow-sm hover:border-primary/30 transition-colors flex flex-col">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-primary/10 text-primary uppercase tracking-wider">
-                        {nudge.nudgeType}
-                      </span>
-                      <MessageSquarePlus size={14} className="text-muted-foreground" />
-                    </div>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      {nudge.context}
-                    </p>
-                    <p className="text-sm font-bold text-foreground leading-relaxed mb-4 flex-1">
-                      {nudge.question}
-                    </p>
-                    <div className="flex flex-wrap gap-1.5 mb-5">
-                      {nudge.keywords.map((kw, i) => (
-                        <span key={i} className="text-[10px] font-medium bg-primary/10 text-primary px-2 py-1 rounded-md border border-primary/10">
-                          #{kw}
+              <div className="space-y-8">
+                {/* Track A: Actionable Next Steps */}
+                <div>
+                  <h4 className="text-xs font-bold text-muted-foreground mb-4 flex items-center gap-2">
+                    <Wrench size={14} /> Actionable Next Steps (실무 제안)
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {nudges.filter(n => n.track === 'A').map(nudge => (
+                      <div key={nudge.id} className="bg-background border border-border rounded-2xl p-5 shadow-sm hover:border-primary/50 transition-colors flex flex-col">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-secondary text-secondary-foreground uppercase tracking-wider">
+                            {nudge.nudgeType}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mb-3">
+                          {nudge.context}
+                        </p>
+                        <p className="text-sm font-bold text-foreground leading-relaxed mb-4 flex-1">
+                          {nudge.question}
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 mb-5">
+                          {nudge.keywords.map((kw, i) => (
+                            <span key={i} className="text-[10px] font-medium bg-muted text-muted-foreground px-2 py-1 rounded-md">
+                              {kw}
+                            </span>
+                          ))}
+                        </div>
+                        {sparringNudgeId === nudge.id ? (
+                          <div className="mt-auto flex flex-col gap-2">
+                            <textarea
+                              className="w-full text-xs p-2 rounded-lg bg-background border border-border resize-none focus:outline-none focus:border-primary"
+                              rows={3}
+                              placeholder="아니, 내 생각은 달라. 차라리..."
+                              value={sparringText}
+                              onChange={(e) => setSparringText(e.target.value)}
+                              autoFocus
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setSparringNudgeId(null)}
+                                className="flex-1 bg-muted text-muted-foreground hover:bg-muted/80 text-xs font-bold py-2 rounded-xl transition-all"
+                              >
+                                취소
+                              </button>
+                              <button
+                                onClick={() => {
+                                  onSparringSubmit(nudge, sparringText);
+                                  setSparringNudgeId(null);
+                                  setSparringText("");
+                                }}
+                                disabled={!sparringText.trim() || applyingNudgeId === nudge.id}
+                                className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold py-2 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {applyingNudgeId === nudge.id ? <Loader2 size={14} className="animate-spin" /> : "반박하기"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-auto flex flex-col gap-2">
+                            <button
+                              onClick={() => onAcceptNudge(nudge)}
+                              disabled={applyingNudgeId === nudge.id}
+                              className="w-full bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
+                              {applyingNudgeId === nudge.id ? (
+                                <><Loader2 size={14} className="animate-spin" /> 구체화 중...</>
+                              ) : (
+                                <>🛠️ 아키텍처에 추가</>
+                              )}
+                            </button>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  setSparringNudgeId(nudge.id);
+                                  setSparringText("");
+                                }}
+                                disabled={applyingNudgeId === nudge.id}
+                                className="flex-1 bg-secondary text-secondary-foreground hover:bg-secondary/80 text-xs font-bold py-2 rounded-xl transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                              >
+                                <MessageSquarePlus size={14} /> 수정 제안
+                              </button>
+                              <button
+                                onClick={() => onRejectNudge(nudge.id)}
+                                disabled={applyingNudgeId === nudge.id}
+                                className="bg-muted text-muted-foreground hover:bg-muted/80 text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center justify-center disabled:opacity-50"
+                              >
+                                패스
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {loadingNudgeTypes.filter(t => ['NextStep', 'MissingPiece', 'Growth', 'EdgeCase'].includes(t)).map((type, idx) => (
+                      <div key={`loading-a-${idx}`} className="bg-background/40 backdrop-blur-sm border border-border border-dashed rounded-2xl p-5 flex flex-col items-center justify-center min-h-[250px]">
+                        <Loader2 size={24} className="animate-spin text-muted-foreground mb-3" />
+                        <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-secondary text-secondary-foreground uppercase tracking-wider mb-2">
+                          {type}
                         </span>
-                      ))}
-                    </div>
-                    {sparringNudgeId === nudge.id ? (
-                      <div className="mt-auto flex flex-col gap-2">
-                        <textarea
-                          className="w-full text-xs p-2 rounded-lg bg-background border border-border resize-none focus:outline-none focus:border-primary"
-                          rows={3}
-                          placeholder="아니, 내 생각은 달라. 차라리..."
-                          value={sparringText}
-                          onChange={(e) => setSparringText(e.target.value)}
-                          autoFocus
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setSparringNudgeId(null)}
-                            className="flex-1 bg-muted text-muted-foreground hover:bg-muted/80 text-xs font-bold py-2 rounded-xl transition-all"
-                          >
-                            취소
-                          </button>
-                          <button
-                            onClick={() => {
-                              onSparringSubmit(nudge, sparringText);
-                              setSparringNudgeId(null);
-                              setSparringText("");
-                            }}
-                            disabled={!sparringText.trim() || applyingNudgeId === nudge.id}
-                            className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold py-2 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                          >
-                            {applyingNudgeId === nudge.id ? <Loader2 size={14} className="animate-spin" /> : "반박하기"}
-                          </button>
-                        </div>
+                        <p className="text-xs text-muted-foreground animate-pulse text-center">
+                          새로운 실무 제안을<br/>준비 중입니다...
+                        </p>
                       </div>
-                    ) : (
-                      <div className="mt-auto flex flex-col gap-2">
-                        <button
-                          onClick={() => onAcceptNudge(nudge)}
-                          disabled={applyingNudgeId === nudge.id}
-                          className="w-full bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2"
-                        >
-                          {applyingNudgeId === nudge.id ? <Loader2 size={14} className="animate-spin" /> : <><Sparkles size={14} /> 오, 자극되네! (적용)</>}
-                        </button>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => {
-                              setSparringNudgeId(nudge.id);
-                              setSparringText("");
-                            }}
-                            className="flex-1 bg-muted text-foreground hover:bg-muted/80 text-xs font-bold py-2 rounded-xl transition-all flex items-center justify-center gap-1.5"
-                          >
-                            <MessageSquarePlus size={14} /> 내 생각은 달라
-                          </button>
-                          <button
-                            onClick={() => onRejectNudge(nudge.id)}
-                            className="flex-1 bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground text-xs font-bold py-2 rounded-xl transition-all flex items-center justify-center gap-1.5"
-                          >
-                            <X size={14} /> 패스
-                          </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Track B: Radical Pivots */}
+                <div>
+                  <h4 className="text-xs font-bold text-primary mb-4 flex items-center gap-2">
+                    <Lightbulb size={14} /> Radical Pivots (도발적 질문)
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {nudges.filter(n => n.track === 'B').map(nudge => (
+                      <div key={nudge.id} className="bg-gradient-to-br from-primary/5 to-purple-500/5 backdrop-blur-sm border border-primary/20 rounded-2xl p-5 shadow-sm hover:border-primary/40 transition-colors flex flex-col">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-primary/10 text-primary uppercase tracking-wider">
+                            {nudge.nudgeType}
+                          </span>
+                          <Sparkles size={14} className="text-primary/50" />
                         </div>
+                        <p className="text-xs text-muted-foreground mb-3">
+                          {nudge.context}
+                        </p>
+                        <p className="text-sm font-bold text-foreground leading-relaxed mb-4 flex-1">
+                          {nudge.question}
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 mb-5">
+                          {nudge.keywords.map((kw, i) => (
+                            <span key={i} className="text-[10px] font-medium bg-primary/10 text-primary px-2 py-1 rounded-md border border-primary/10">
+                              #{kw}
+                            </span>
+                          ))}
+                        </div>
+                        {sparringNudgeId === nudge.id ? (
+                          <div className="mt-auto flex flex-col gap-2">
+                            <textarea
+                              className="w-full text-xs p-2 rounded-lg bg-background border border-border resize-none focus:outline-none focus:border-primary"
+                              rows={3}
+                              placeholder="아니, 내 생각은 달라. 차라리..."
+                              value={sparringText}
+                              onChange={(e) => setSparringText(e.target.value)}
+                              autoFocus
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setSparringNudgeId(null)}
+                                className="flex-1 bg-muted text-muted-foreground hover:bg-muted/80 text-xs font-bold py-2 rounded-xl transition-all"
+                              >
+                                취소
+                              </button>
+                              <button
+                                onClick={() => {
+                                  onSparringSubmit(nudge, sparringText);
+                                  setSparringNudgeId(null);
+                                  setSparringText("");
+                                }}
+                                disabled={!sparringText.trim() || applyingNudgeId === nudge.id}
+                                className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold py-2 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {applyingNudgeId === nudge.id ? <Loader2 size={14} className="animate-spin" /> : "반박하기"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-auto flex flex-col gap-2">
+                            <button
+                              onClick={() => onAcceptNudge(nudge)}
+                              disabled={applyingNudgeId === nudge.id}
+                              className="w-full bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
+                              {applyingNudgeId === nudge.id ? (
+                                <><Loader2 size={14} className="animate-spin" /> 구체화 중...</>
+                              ) : (
+                                <>🔥 오, 자극되네! (바로 적용)</>
+                              )}
+                            </button>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  setSparringNudgeId(nudge.id);
+                                  setSparringText("");
+                                }}
+                                disabled={applyingNudgeId === nudge.id}
+                                className="flex-1 bg-secondary text-secondary-foreground hover:bg-secondary/80 text-xs font-bold py-2 rounded-xl transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                              >
+                                <MessageSquarePlus size={14} /> 내 생각은 달라
+                              </button>
+                              <button
+                                onClick={() => onRejectNudge(nudge.id)}
+                                disabled={applyingNudgeId === nudge.id}
+                                className="bg-muted text-muted-foreground hover:bg-muted/80 text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center justify-center disabled:opacity-50"
+                              >
+                                패스
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    ))}
+                    {loadingNudgeTypes.filter(t => ['WhatIf', 'Gap', 'Constraint', 'Inversion'].includes(t)).map((type, idx) => (
+                      <div key={`loading-b-${idx}`} className="bg-background/40 backdrop-blur-sm border border-primary/20 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center min-h-[250px]">
+                        <Loader2 size={24} className="animate-spin text-primary mb-3" />
+                        <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-primary/10 text-primary uppercase tracking-wider mb-2">
+                          {type}
+                        </span>
+                        <p className="text-xs text-muted-foreground animate-pulse text-center">
+                          새로운 도발을<br/>준비 중입니다...
+                        </p>
+                      </div>
+                    ))}
                   </div>
-                ))}
-                {loadingNudgeTypes.map((type, idx) => (
-                  <div key={`loading-${idx}`} className="bg-background/40 backdrop-blur-sm border border-border border-dashed rounded-2xl p-5 flex flex-col items-center justify-center min-h-[250px]">
-                    <Loader2 size={24} className="animate-spin text-primary mb-3" />
-                    <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-primary/10 text-primary uppercase tracking-wider mb-2">
-                      {type}
-                    </span>
-                    <p className="text-xs text-muted-foreground animate-pulse text-center">
-                      새로운 도발을<br/>준비 중입니다...
-                    </p>
-                  </div>
-                ))}
+                </div>
               </div>
             ) : (
               <div className="text-center py-12 text-muted-foreground text-sm bg-background/50 rounded-2xl border border-dashed border-border">

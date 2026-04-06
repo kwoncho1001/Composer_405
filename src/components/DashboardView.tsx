@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Note, CostEstimate, PitchDeck, CompetitorAnalysis, ProactiveNudge } from '../types';
+import { Note, CostEstimate, PitchDeck, CompetitorAnalysis, ProactiveNudge, LensType } from '../types';
 import { Layers, Blocks, Cpu, Code, AlertCircle, CheckCircle2, CircleDashed, Target, Loader2, X, Receipt, Cloud, Wrench, Zap, Presentation, FileText, Lightbulb, Users, Briefcase, Swords, Crosshair, ShieldAlert, Rocket, PlusCircle, Sparkles, MessageSquarePlus, ChevronRight, LayoutGrid, Map, Network } from 'lucide-react';
 import { scopeMVP, estimateProjectCost, generatePitchDeck, analyzeCompetitor, generateInitialBlueprint, generateProactiveNudges, addFeatureBlueprint, refineIdeaWithSparring } from '../services/gemini';
 import * as dbManager from '../services/dbManager';
@@ -17,9 +17,11 @@ interface DashboardViewProps {
   notes: Note[];
   onSelectNote: (id: string) => void;
   onNotesChanged?: () => void;
+  activeLens: LensType;
+  setActiveLens: (lens: LensType) => void;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, onSelectNote, onNotesChanged }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, onSelectNote, onNotesChanged, activeLens, setActiveLens }) => {
   const [showScopingModal, setShowScopingModal] = useState(false);
   const [scopingConstraint, setScopingConstraint] = useState('');
   const [isScoping, setIsScoping] = useState(false);
@@ -44,7 +46,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
 
   const [nudges, setNudges] = useState<ProactiveNudge[]>([]);
   const [pastNudges, setPastNudges] = useState<string[]>([]);
-  const [loadingNudgeTypes, setLoadingNudgeTypes] = useState<('WhatIf' | 'Gap' | 'Constraint' | 'Inversion')[]>([]);
+  const [loadingNudgeTypes, setLoadingNudgeTypes] = useState<('WhatIf' | 'Gap' | 'Constraint' | 'Inversion' | 'NextStep' | 'MissingPiece' | 'Growth' | 'EdgeCase')[]>([]);
   const [isFetchingNudges, setIsFetchingNudges] = useState(false);
   const [isCoFounderOpen, setIsCoFounderOpen] = useState(false);
   const [applyingNudgeId, setApplyingNudgeId] = useState<string | null>(null);
@@ -54,8 +56,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
     if (nudges.length === 0 && notes.length > 0) {
       setIsFetchingNudges(true);
       try {
-        const result = await generateProactiveNudges(notes, pastNudges);
-        setNudges(result);
+        const [trackA, trackB] = await Promise.all([
+          generateProactiveNudges(notes, pastNudges, 'A'),
+          generateProactiveNudges(notes, pastNudges, 'B')
+        ]);
+        setNudges([...trackA, ...trackB]);
       } catch (e) {
         console.error(e);
       } finally {
@@ -68,8 +73,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
     setIsFetchingNudges(true);
     setNudges([]);
     try {
-      const result = await generateProactiveNudges(notes, pastNudges);
-      setNudges(result);
+      const [trackA, trackB] = await Promise.all([
+        generateProactiveNudges(notes, pastNudges, 'A'),
+        generateProactiveNudges(notes, pastNudges, 'B')
+      ]);
+      setNudges([...trackA, ...trackB]);
     } catch (e) {
       console.error(e);
     } finally {
@@ -95,7 +103,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
     setLoadingNudgeTypes(prev => [...prev, rejectedNudge.nudgeType]);
 
     try {
-      const result = await generateProactiveNudges(notes, newPastNudges, rejectedNudge.nudgeType);
+      const result = await generateProactiveNudges(notes, newPastNudges, rejectedNudge.track, rejectedNudge.nudgeType);
       if (result && result.length > 0) {
         setNudges(prev => [...prev, result[0]]);
       }
@@ -559,8 +567,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
           <JourneyView notes={notes} onSelectNote={onSelectNote} />
         )}
         {activeView === 'galaxy' && (
-          <div className="h-full p-6">
-            <GalaxyView notes={notes} projectName="My Project" onSelectNote={onSelectNote} />
+          <div className="h-full p-4 md:p-6 flex flex-col">
+            <div className="flex justify-center mb-4">
+              <div className="flex gap-1 bg-muted/50 p-1 rounded-xl border border-border">
+                <button 
+                  onClick={() => setActiveLens('Feature')}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${activeLens === 'Feature' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  🎯 기능(UX)
+                </button>
+              </div>
+            </div>
+            <div className="flex-1">
+              <GalaxyView notes={notes} projectName="My Project" onSelectNote={onSelectNote} activeLens={activeLens} />
+            </div>
           </div>
         )}
       </div>

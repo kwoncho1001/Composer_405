@@ -21,7 +21,7 @@ import {
   FileEdit
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Note, OperationType } from './types';
+import { Note, OperationType, LensType } from './types';
 import { handleFirestoreError } from './lib/utils';
 import * as dbManager from './services/dbManager';
 import { syncNotes } from './services/syncManager';
@@ -34,6 +34,7 @@ function MainApp() {
   const [isLeftOpen, setIsLeftOpen] = useState(false);
   const [isRightOpen, setIsRightOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'editor' | 'dashboard'>('dashboard');
+  const [activeLens, setActiveLens] = useState<LensType>('Feature');
 
   const toggleLeftSidebar = (open: boolean) => {
     setIsLeftOpen(open);
@@ -189,6 +190,8 @@ function MainApp() {
             }}
             onNotesChanged={loadNotes}
             notes={projectNotes}
+            activeLens={activeLens}
+            setActiveLens={setActiveLens}
           />
           {/* Left Resizer Handle */}
           <div 
@@ -297,6 +300,8 @@ function MainApp() {
                         setViewMode('editor');
                       }} 
                       onNotesChanged={loadNotes}
+                      activeLens={activeLens}
+                      setActiveLens={setActiveLens}
                     />
                   ) : (
                     <NoteEditor 
@@ -340,6 +345,8 @@ function MainApp() {
                 syncNotes(selectedProjectId).then(() => loadNotes());
               }
             }} 
+            activeLens={activeLens}
+            setActiveLens={setActiveLens}
           />
           {/* Right Resizer Handle */}
           <div 

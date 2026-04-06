@@ -18,24 +18,25 @@ ${businessIdea}
 1. Domain: 비즈니스의 최상위 개념 (예: '사용자 계정 시스템', '커머스 결제 시스템')
 2. Module: 도메인을 구성하는 기능적 그룹 (예: '소셜 로그인', '장바구니')
 3. Logic: 사용자가 체감하는 실제 서비스 단위 (예: '중복 아이디 가입 방지')
-4. MVP 스코핑: 당장 첫 달에 필수적인 기능(Must-have)만 포함하세요. (Nice-to-have는 제외)
-5. 각 노드는 title, summary, type('Domain', 'Module', 'Logic')을 가져야 합니다.
-6. 계층 구조를 명확히 하기 위해, Domain 안에 Module 배열이 있고, Module 안에 Logic 배열이 있는 중첩된 JSON 구조로 반환하세요.
+4. **언어 및 직관성**: 모든 제목(title)과 요약(summary)은 **한국어**로 작성하며, 개발 지식이 없는 사람도 한눈에 이해할 수 있도록 **매우 직관적이고 쉬운 단어**를 사용하세요.
+5. MVP 스코핑: 당장 첫 달에 필수적인 기능(Must-have)만 포함하세요. (Nice-to-have는 제외)
+6. 각 노드는 title, summary, type('Domain', 'Module', 'Logic')을 가져야 합니다.
+7. 계층 구조를 명확히 하기 위해, Domain 안에 Module 배열이 있고, Module 안에 Logic 배열이 있는 중첩된 JSON 구조로 반환하세요.
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {
   "domains": [
     {
-      "title": "도메인 제목",
-      "summary": "도메인 요약",
+      "title": "직관적인 한국어 도메인 제목",
+      "summary": "한국어 도메인 요약",
       "modules": [
         {
-          "title": "모듈 제목",
-          "summary": "모듈 요약",
+          "title": "직관적인 한국어 모듈 제목",
+          "summary": "한국어 모듈 요약",
           "logics": [
             {
-              "title": "로직 제목",
-              "summary": "로직 요약"
+              "title": "직관적인 한국어 로직 제목",
+              "summary": "한국어 로직 요약"
             }
           ]
         }
@@ -819,6 +820,124 @@ ${notes.map(n => `Type: ${n.noteType} | Priority: ${n.priority} | Title: ${n.tit
   }
 };
 
+export const generateModuleFromCluster = async (logics: {title: string, summary: string}[]) => {
+  const prompt = `당신은 세계 최고의 소프트웨어 아키텍트입니다.
+다음은 수학적 유사도를 기반으로 군집화된 로직(Logic)들의 목록입니다. 이 로직들을 포괄하는 하나의 모듈(Module)을 설계하세요.
+
+[포함된 로직 목록]
+${JSON.stringify(logics, null, 2)}
+
+[요구사항]
+1. 모듈의 이름(title)과 한 줄 요약(summary)을 **한국어**로 작성하세요.
+2. **중요**: 제목(title)은 개발자가 아닌 일반 사용자나 기획자도 한눈에 이해할 수 있을 만큼 **매우 직관적이고 쉬운 단어**를 사용하세요. (예: 'AuthModule' 대신 '사용자 인증 및 보안 관리')
+3. 모듈의 상세 본문(body)은 다음 Markdown 템플릿을 엄격히 따라 작성하세요:
+
+### 🎯 역할 및 목적 (Role & Purpose)
+이 모듈이 시스템 내에서 어떤 역할을 수행하는지 1~2줄로 요약.
+
+### ⚙️ 핵심 로직 (Core Logics)
+포함된 로직들이 구체적으로 어떤 흐름으로 작동하는지 설명.
+
+### 🔌 인터페이스 및 의존성 (Interfaces & Dependencies)
+이 모듈이 외부(다른 모듈이나 사용자)와 어떻게 상호작용하는지 (입력/출력 관점).
+
+### ⚠️ 예외 및 엣지 케이스 (Edge Cases)
+이 모듈이 처리해야 할 잠재적 오류나 예외 상황.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "title": "직관적인 한국어 모듈 이름",
+  "summary": "한국어 모듈 한 줄 요약",
+  "body": "마크다운 형식의 상세 본문"
+}`;
+
+  const responsePromise = ai.models.generateContent({
+    model: MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          summary: { type: Type.STRING },
+          body: { type: Type.STRING }
+        },
+        required: ["title", "summary", "body"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 30000, { text: "{}" } as any);
+  try {
+    return JSON.parse(response.text || "{}");
+  } catch (e) {
+    console.error("Failed to generate module from cluster", e);
+    return { title: "Unknown Module", summary: "Failed to generate", body: "" };
+  }
+};
+
+export const generateDomainsFromModules = async (modules: {id: string, title: string, summary: string}[]) => {
+  const prompt = `당신은 세계 최고의 소프트웨어 아키텍트입니다.
+다음은 시스템을 구성하는 모듈(Module)들의 목록입니다. 이 모듈들을 분석하여 3~5개의 최상위 도메인(Domain)으로 분류하고 설계하세요.
+
+[모듈 목록]
+${JSON.stringify(modules, null, 2)}
+
+[요구사항]
+1. 각 도메인의 이름(title)과 요약(summary)을 **한국어**로 작성하세요.
+2. **중요**: 도메인 제목(title)은 시스템의 거대한 뼈대를 나타내므로, 누구나 한눈에 시스템의 큰 구역을 파악할 수 있도록 **매우 직관적이고 명확한 한국어 단어**를 사용하세요. (예: 'CoreDomain' 대신 '핵심 서비스 엔진')
+3. 각 도메인에 속하는 모듈들의 ID(moduleIds)를 배열로 매핑하세요. 모든 모듈은 반드시 하나의 도메인에 속해야 합니다.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "domains": [
+    {
+      "title": "직관적인 한국어 도메인 이름",
+      "summary": "한국어 도메인 요약",
+      "moduleIds": ["모듈 ID 1", "모듈 ID 2"]
+    }
+  ]
+}`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          domains: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                moduleIds: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                }
+              },
+              required: ["title", "summary", "moduleIds"]
+            }
+          }
+        },
+        required: ["domains"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: "{}" } as any);
+  try {
+    return JSON.parse(response.text || "{}");
+  } catch (e) {
+    console.error("Failed to generate domains from modules", e);
+    return { domains: [] };
+  }
+};
+
 // Phase 7: PR/FAQ & Pitch Deck Generator (Amazon Working Backwards)
 export const generatePitchDeck = async (notes: Note[]) => {
   const prompt = `당신은 실리콘밸리의 탑티어 벤처캐피탈(VC) 파트너이자, 아마존(Amazon)의 신제품 기획자입니다.
@@ -994,7 +1113,7 @@ ${notes.map(n => `Title: ${n.title}`).join('\n')}
     throw new Error("Invalid JSON format from AI.");
   }
 };
-export const generateProactiveNudges = async (notes: Note[], pastNudges: string[] = [], targetType?: 'WhatIf' | 'Gap' | 'Constraint' | 'Inversion') => {
+export const generateProactiveNudges = async (notes: Note[], pastNudges: string[] = [], track: 'A' | 'B', targetType?: string) => {
   const lenses = [
     "Gen-Z 타겟", "극단적 미니멀리즘", "게이미피케이션", "하드코어 B2B", 
     "블록체인/Web3", "오프라인 결합", "10배 비싼 프리미엄", "로컬 커뮤니티 기반",
@@ -1003,42 +1122,64 @@ export const generateProactiveNudges = async (notes: Note[], pastNudges: string[
   
   const randomLenses = lenses.sort(() => 0.5 - Math.random()).slice(0, 3);
 
-  const typeInstruction = targetType 
-    ? `반드시 '${targetType}' 타입의 도발적인 질문(Nudge) 1개를 생성하세요.`
-    : `반드시 4가지 타입(WhatIf, Gap, Constraint, Inversion) 각각에 대해 2개씩, 총 8개의 도발적인 질문(Nudge)을 생성하세요.`;
+  let typeInstruction = '';
+  let typeDefinitions = '';
+  let allowedTypes = '';
+
+  if (track === 'A') {
+    typeInstruction = targetType 
+      ? `반드시 '${targetType}' 타입의 실무적인 제안 1개를 생성하세요.`
+      : `반드시 4가지 타입(NextStep, MissingPiece, Growth, EdgeCase) 각각에 대해 1개씩, 총 4개의 실무적인 제안(Nudge)을 생성하세요.`;
+    
+    typeDefinitions = `[4가지 Nudge 타입 정의 (Track A: 실무/기획 제안)]
+1. NextStep (다음 논리적 단계): "현재 'A' 모듈이 있네요. 자연스러운 다음 단계로 [B] 모듈을 추가할까요?"
+2. MissingPiece (누락된 필수 기능): "C 도메인은 설계되었는데, [D 로직]이 비어있습니다. 추가하시겠습니까?"
+3. Growth (성장 및 수익화): "리텐션을 높이기 위해 [E 프로모션 로직]이나 [F 보상 시스템]을 도입해 보는 건 어떨까요?"
+4. EdgeCase (예외 처리): "유저가 G 행동을 했을 때의 [H 예외 처리 로직]이 필요해 보입니다."`;
+    
+    allowedTypes = `"NextStep" | "MissingPiece" | "Growth" | "EdgeCase"`;
+  } else {
+    typeInstruction = targetType 
+      ? `반드시 '${targetType}' 타입의 도발적인 질문(Nudge) 1개를 생성하세요.`
+      : `반드시 4가지 타입(WhatIf, Gap, Constraint, Inversion) 각각에 대해 1개씩, 총 4개의 도발적인 질문(Nudge)을 생성하세요.`;
+    
+    typeDefinitions = `[4가지 Nudge 타입 정의 (Track B: 비전/피벗 제안)]
+1. WhatIf (극단적 비유): "만약 이 앱을 틴더처럼 만든다면?", "링크드인처럼 전문가 네트워크로 푼다면?"
+2. Gap (구조적 공백): "결제는 있는데 환불이 없네요?", "유저가 내일 다시 올 이유(Retention)가 없네요?"
+3. Constraint (강제 제약): "내일 당장 1개 기능만 런칭해야 한다면?", "예산이 0원이라면?"
+4. Inversion (역발상): "이 프로젝트를 가장 빠르고 확실하게 망하게 하려면?"`;
+    
+    allowedTypes = `"WhatIf" | "Gap" | "Constraint" | "Inversion"`;
+  }
 
   const blacklistInstruction = pastNudges.length > 0
     ? `\n[주의: 다음 아이디어들은 이미 사용자가 거절했거나 검토한 내용이므로 **절대 중복해서 제안하지 마세요**]\n${pastNudges.map(n => `- ${n}`).join('\n')}\n`
     : '';
 
-  const prompt = `당신은 사용자의 아이디어를 자극하고 도발하는 AI Co-founder입니다.
-사용자의 프로젝트 노트들을 분석하여, 정답을 주지 말고 **사용자가 반박하거나 영감을 얻을 수 있는 도발적인 질문(Nudge)**을 생성하세요.
-"Ideas don't come fully formed" 철학에 따라, 사용자가 스스로 생각하게 만들어야 합니다.
+  const prompt = `당신은 사용자의 아이디어를 자극하고 시스템을 발전시키는 AI Co-founder입니다.
+사용자의 프로젝트 노트들을 분석하여, ${track === 'A' ? '당장 개발해야 할 구체적인 기능이나 로직을 제안하세요.' : '정답을 주지 말고 사용자가 반박하거나 영감을 얻을 수 있는 도발적인 질문을 생성하세요.'}
 
 ${typeInstruction}
 
 [랜덤 관점 (Lens)]
-이번 생성에는 다음 관점들을 적극적으로 반영하여 뻔하지 않은 질문을 만드세요:
+이번 생성에는 다음 관점들을 적극적으로 반영하여 뻔하지 않은 제안을 만드세요:
 ${randomLenses.join(', ')}
 ${blacklistInstruction}
-[4가지 Nudge 타입 정의]
-1. WhatIf (극단적 비유): "만약 이 앱을 틴더처럼 만든다면?", "링크드인처럼 전문가 네트워크로 푼다면?"
-2. Gap (구조적 공백): "결제는 있는데 환불이 없네요?", "유저가 내일 다시 올 이유(Retention)가 없네요?"
-3. Constraint (강제 제약): "내일 당장 1개 기능만 런칭해야 한다면?", "예산이 0원이라면?"
-4. Inversion (역발상): "이 프로젝트를 가장 빠르고 확실하게 망하게 하려면?"
+${typeDefinitions}
 
 [현재 시스템]
-${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
+${notes.map(n => `Type: ${n.noteType} | Status: ${n.status} | Title: ${n.title}`).join('\n')}
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {
   "nudges": [
     {
       "id": "고유문자열",
-      "nudgeType": "WhatIf" | "Gap" | "Constraint" | "Inversion",
+      "nudgeType": ${allowedTypes},
+      "track": "${track}",
       "context": "현재 상황에 대한 짧은 진단 (예: 현재는 사용자가 혼자 쓰는 툴이네요.)",
-      "question": "도발적이고 극단적인 질문 (예: 만약 이 앱을 틴더처럼 유저끼리 스와이프해서 매칭되게 만든다면 어떨까요?)",
-      "keywords": ["#틴더방식", "#소셜", "#매칭"],
+      "question": "${track === 'A' ? '구체적인 기능 추가 제안 (예: 회원가입 모듈이 있으니 소셜 로그인 연동을 추가할까요?)' : '도발적이고 극단적인 질문 (예: 만약 이 앱을 틴더처럼 유저끼리 스와이프해서 매칭되게 만든다면 어떨까요?)'}",
+      "keywords": ["#키워드1", "#키워드2", "#키워드3"],
       "actionPrompt": "이 아이디어를 시스템에 추가하기 위한 프롬프트"
     }
   ]
@@ -1074,17 +1215,21 @@ ${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
     }
   });
 
-  const response = await withTimeout(responsePromise, 60000, { text: "[]" } as any);
+  const response = await withTimeout(responsePromise, 60000, { text: '{"nudges": []}' } as any);
+  
   if (!response || !response.text) {
-    throw new Error("Failed to generate nudges.");
+    console.warn("Gemini returned empty response for nudges, returning empty array.");
+    return [];
   }
 
   try {
     const jsonStr = response.text.trim();
-    return JSON.parse(jsonStr).nudges as { id: string, nudgeType: 'WhatIf' | 'Gap' | 'Constraint' | 'Inversion', context: string, question: string, keywords: string[], actionPrompt: string }[];
+    const parsed = JSON.parse(jsonStr).nudges as any[];
+    if (!parsed) return [];
+    return parsed.map(n => ({ ...n, track })) as ProactiveNudge[];
   } catch (e) {
     console.error("Failed to parse Nudges JSON", e);
-    throw new Error("Invalid JSON format from AI.");
+    return [];
   }
 };
 
