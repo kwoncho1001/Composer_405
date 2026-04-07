@@ -2,25 +2,21 @@ import React from 'react';
 import { Note, ProactiveNudge } from '../../types';
 import { Target, Receipt, Presentation, Swords, Sparkles, MessageSquarePlus, ChevronRight, Loader2, CheckCircle2, AlertCircle, CircleDashed, Clock, RefreshCw, X, Wrench, Lightbulb } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useCoFounder } from '../../contexts/CoFounderContext';
 
 interface BentoViewProps {
   notes: Note[];
-  nudges: ProactiveNudge[];
-  isFetchingNudges: boolean;
-  loadingNudgeTypes: ('WhatIf' | 'Gap' | 'Constraint' | 'Inversion' | 'NextStep' | 'MissingPiece' | 'Growth' | 'EdgeCase')[];
   onAcceptNudge: (nudge: ProactiveNudge) => void;
   onSparringSubmit: (nudge: ProactiveNudge, response: string) => void;
   onRejectNudge: (nudgeId: string) => void;
   onRerollAllNudges: () => void;
-  applyingNudgeId: string | null;
   onOpenAction: (action: string) => void;
 }
 
 export const BentoView: React.FC<BentoViewProps> = ({ 
-  notes, nudges, isFetchingNudges, loadingNudgeTypes, 
-  onAcceptNudge, onSparringSubmit, onRejectNudge, onRerollAllNudges, 
-  applyingNudgeId, onOpenAction 
+  notes, onAcceptNudge, onSparringSubmit, onRejectNudge, onRerollAllNudges, onOpenAction 
 }) => {
+  const { nudges, isFetchingNudges, loadingNudgeTypes, applyingNudgeId } = useCoFounder();
   const [sparringNudgeId, setSparringNudgeId] = React.useState<string | null>(null);
   const [sparringText, setSparringText] = React.useState("");
   const totalNotes = notes.length;
@@ -90,22 +86,20 @@ export const BentoView: React.FC<BentoViewProps> = ({
             <Sparkles size={120} />
           </div>
           <div className="relative z-10">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-start gap-4 mb-6">
               <h3 className="text-sm font-black uppercase tracking-widest text-primary flex items-center gap-2">
-                <Sparkles size={16} /> AI Co-founder Insights
+                <Sparkles size={16} /> AI CO-FOUNDER INSIGHTS
               </h3>
-              {nudges.length > 0 && (
-                <button 
-                  onClick={onRerollAllNudges}
-                  disabled={isFetchingNudges}
-                  className="text-xs font-bold bg-primary/10 hover:bg-primary/20 text-primary px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-50"
-                >
-                  <RefreshCw size={14} className={isFetchingNudges ? "animate-spin" : ""} />
-                  새로운 인사이트 뽑기
-                </button>
-              )}
+              <button 
+                onClick={onRerollAllNudges}
+                disabled={isFetchingNudges}
+                className="text-xs font-bold bg-primary/10 hover:bg-primary/20 text-primary px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-50"
+              >
+                <RefreshCw size={14} className={isFetchingNudges ? "animate-spin" : ""} />
+                {nudges.length > 0 ? "새로운 인사이트 뽑기" : "인사이트 생성하기"}
+              </button>
             </div>
-            
+            <div className="w-full">
             {isFetchingNudges && nudges.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 space-y-4">
                 <Loader2 size={32} className="animate-spin text-primary" />
@@ -113,15 +107,19 @@ export const BentoView: React.FC<BentoViewProps> = ({
                   현재 시스템을 분석하여<br/>새로운 비즈니스 아이디어를 발상 중입니다...
                 </p>
               </div>
-            ) : nudges.length > 0 || loadingNudgeTypes.length > 0 ? (
+            ) : nudges.length === 0 ? (
+              <div className="text-center py-24 text-muted-foreground text-sm bg-background/50 rounded-2xl border border-dashed border-border w-full">
+                {notes.length === 0 ? "프로젝트에 노트를 추가하면 AI 코파운더가 인사이트를 제공합니다." : "현재 제안할 새로운 아이디어가 없습니다."}
+              </div>
+            ) : (
               <div className="space-y-8">
-                {/* Track A: Actionable Next Steps */}
-                <div>
-                  <h4 className="text-xs font-bold text-muted-foreground mb-4 flex items-center gap-2">
-                    <Wrench size={14} /> Actionable Next Steps (실무 제안)
+                {/* Track: Involution */}
+                <div className="mb-12">
+                  <h4 className="text-sm font-bold text-muted-foreground mb-6 flex items-center gap-2">
+                    <Wrench size={16} /> Involution (내적 최적화)
                   </h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {nudges.filter(n => n.track === 'A').map(nudge => (
+                    {nudges.filter(n => n.track === 'Involution').map(nudge => (
                       <div key={nudge.id} className="bg-background border border-border rounded-2xl p-5 shadow-sm hover:border-primary/50 transition-colors flex flex-col">
                         <div className="flex items-center justify-between mb-3">
                           <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-secondary text-secondary-foreground uppercase tracking-wider">
@@ -131,15 +129,13 @@ export const BentoView: React.FC<BentoViewProps> = ({
                         <p className="text-xs text-muted-foreground mb-3">
                           {nudge.context}
                         </p>
-                        <p className="text-sm font-bold text-foreground leading-relaxed mb-4 flex-1">
+                        <p className="text-sm font-bold text-foreground leading-relaxed mb-4">
                           {nudge.question}
                         </p>
-                        <div className="flex flex-wrap gap-1.5 mb-5">
-                          {nudge.keywords.map((kw, i) => (
-                            <span key={i} className="text-[10px] font-medium bg-muted text-muted-foreground px-2 py-1 rounded-md">
-                              {kw}
-                            </span>
-                          ))}
+                        <div className="bg-muted/50 rounded-xl p-3 mb-5 flex-1">
+                          <p className="text-xs text-muted-foreground leading-relaxed">
+                            <strong className="text-foreground">AI 가설: </strong>{nudge.hypothesis}
+                          </p>
                         </div>
                         {sparringNudgeId === nudge.id ? (
                           <div className="mt-auto flex flex-col gap-2">
@@ -207,27 +203,27 @@ export const BentoView: React.FC<BentoViewProps> = ({
                         )}
                       </div>
                     ))}
-                    {loadingNudgeTypes.filter(t => ['NextStep', 'MissingPiece', 'Growth', 'EdgeCase'].includes(t)).map((type, idx) => (
-                      <div key={`loading-a-${idx}`} className="bg-background/40 backdrop-blur-sm border border-border border-dashed rounded-2xl p-5 flex flex-col items-center justify-center min-h-[250px]">
+                    {loadingNudgeTypes.filter(t => ['Cost', 'Debt', 'EdgeCase', 'Efficiency'].includes(t)).map((type, idx) => (
+                      <div key={`loading-involution-${idx}`} className="bg-background/40 backdrop-blur-sm border border-border border-dashed rounded-2xl p-5 flex flex-col items-center justify-center min-h-[250px]">
                         <Loader2 size={24} className="animate-spin text-muted-foreground mb-3" />
                         <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-secondary text-secondary-foreground uppercase tracking-wider mb-2">
                           {type}
                         </span>
                         <p className="text-xs text-muted-foreground animate-pulse text-center">
-                          새로운 실무 제안을<br/>준비 중입니다...
+                          새로운 최적화 방안을<br/>준비 중입니다...
                         </p>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Track B: Radical Pivots */}
-                <div>
-                  <h4 className="text-xs font-bold text-primary mb-4 flex items-center gap-2">
-                    <Lightbulb size={14} /> Radical Pivots (도발적 질문)
+                {/* Track: Evolution */}
+                <div className="pt-8 border-t border-primary/10">
+                  <h4 className="text-sm font-bold text-primary mb-6 flex items-center gap-2">
+                    <Lightbulb size={16} /> Evolution (외적 임팩트)
                   </h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {nudges.filter(n => n.track === 'B').map(nudge => (
+                    {nudges.filter(n => n.track === 'Evolution').map(nudge => (
                       <div key={nudge.id} className="bg-gradient-to-br from-primary/5 to-purple-500/5 backdrop-blur-sm border border-primary/20 rounded-2xl p-5 shadow-sm hover:border-primary/40 transition-colors flex flex-col">
                         <div className="flex items-center justify-between mb-3">
                           <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-primary/10 text-primary uppercase tracking-wider">
@@ -238,15 +234,13 @@ export const BentoView: React.FC<BentoViewProps> = ({
                         <p className="text-xs text-muted-foreground mb-3">
                           {nudge.context}
                         </p>
-                        <p className="text-sm font-bold text-foreground leading-relaxed mb-4 flex-1">
+                        <p className="text-sm font-bold text-foreground leading-relaxed mb-4">
                           {nudge.question}
                         </p>
-                        <div className="flex flex-wrap gap-1.5 mb-5">
-                          {nudge.keywords.map((kw, i) => (
-                            <span key={i} className="text-[10px] font-medium bg-primary/10 text-primary px-2 py-1 rounded-md border border-primary/10">
-                              #{kw}
-                            </span>
-                          ))}
+                        <div className="bg-primary/5 rounded-xl p-3 mb-5 flex-1 border border-primary/10">
+                          <p className="text-xs text-primary/80 leading-relaxed">
+                            <strong className="text-primary">AI 가설: </strong>{nudge.hypothesis}
+                          </p>
                         </div>
                         {sparringNudgeId === nudge.id ? (
                           <div className="mt-auto flex flex-col gap-2">
@@ -314,28 +308,24 @@ export const BentoView: React.FC<BentoViewProps> = ({
                         )}
                       </div>
                     ))}
-                    {loadingNudgeTypes.filter(t => ['WhatIf', 'Gap', 'Constraint', 'Inversion'].includes(t)).map((type, idx) => (
-                      <div key={`loading-b-${idx}`} className="bg-background/40 backdrop-blur-sm border border-primary/20 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center min-h-[250px]">
+                    {loadingNudgeTypes.filter(t => ['AhaMoment', 'HighImpact', 'Pivot', 'Expansion'].includes(t)).map((type, idx) => (
+                      <div key={`loading-evolution-${idx}`} className="bg-background/40 backdrop-blur-sm border border-primary/20 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center min-h-[250px]">
                         <Loader2 size={24} className="animate-spin text-primary mb-3" />
                         <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-primary/10 text-primary uppercase tracking-wider mb-2">
                           {type}
                         </span>
                         <p className="text-xs text-muted-foreground animate-pulse text-center">
-                          새로운 도발을<br/>준비 중입니다...
+                          거대한 임팩트를<br/>준비 중입니다...
                         </p>
                       </div>
                     ))}
                   </div>
                 </div>
               </div>
-            ) : (
-              <div className="text-center py-12 text-muted-foreground text-sm bg-background/50 rounded-2xl border border-dashed border-border">
-                {notes.length === 0 ? "프로젝트에 노트를 추가하면 AI 코파운더가 인사이트를 제공합니다." : "현재 제안할 새로운 아이디어가 없습니다."}
-              </div>
             )}
+            </div>
           </div>
         </div>
-
       </div>
     </div>
   );

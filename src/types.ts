@@ -55,11 +55,11 @@ export interface CompetitorAnalysis {
 
 export interface ProactiveNudge {
   id: string;
-  nudgeType: 'WhatIf' | 'Gap' | 'Constraint' | 'Inversion' | 'NextStep' | 'MissingPiece' | 'Growth' | 'EdgeCase';
-  track: 'A' | 'B';
+  nudgeType: string;
+  track: 'Involution' | 'Evolution';
   context: string;
   question: string;
-  keywords: string[];
+  hypothesis: string;
   actionPrompt: string;
 }
 

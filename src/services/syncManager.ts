@@ -80,9 +80,9 @@ export const syncNotes = async (projectId: string, onProgress?: (notes: Note[]) 
 
   // 4. Upload local notes to Firebase
   if (toUpload.length > 0) {
-    for (let i = 0; i < toUpload.length; i += 400) {
+    for (let i = 0; i < toUpload.length; i += 50) {
       const batch = writeBatch(db);
-      const chunk = toUpload.slice(i, i + 400);
+      const chunk = toUpload.slice(i, i + 50);
       
       for (const note of chunk) {
         const noteRef = doc(db, 'notes', note.id);

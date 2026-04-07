@@ -639,69 +639,78 @@ export const GitHubSync = ({ onClose, projectId, onSyncComplete, activeLens, set
 
           // Phase 2: AI Deep Analysis (IPO Model)
           addLog(`  Phase 2: AI Deep Analysis...`);
-          for (const item of fileLogicUnits) {
+          const BATCH_SIZE = 3;
+          for (let i = 0; i < fileLogicUnits.length; i += BATCH_SIZE) {
             if (cancelSyncRef.current) break;
-            
-            const { unit, file, unitHash } = item;
-            const cachedNote = allNotes.find(n => n.noteType === 'Snapshot' && n.contentHash === unitHash && n.originPath === file.path);
-            
-            if (cachedNote) {
-              addLog(`    Cache Hit: Skipping AI analysis for ${unit.title}`);
-              const parentLogic = allNotes.find(n => n.noteType === 'Logic' && n.childNoteIds.includes(cachedNote.id));
-              if (parentLogic) {
-                item.isCacheHit = true;
-                item.cachedNote = cachedNote;
-                item.parentLogic = parentLogic;
-                item.businessLogic = {
-                  title: parentLogic.title,
-                  summary: parentLogic.summary,
-                  components: parentLogic.components,
-                  flow: parentLogic.flow,
-                  io: parentLogic.io
-                };
-                item.analysis = {
-                  title: cachedNote.title,
-                  summary: cachedNote.summary,
-                  components: cachedNote.components,
-                  flow: cachedNote.flow,
-                  io: cachedNote.io
-                };
-                item.caseType = '4-1';
-                item.targetLogicB = parentLogic;
-                item.targetSnapshotB = cachedNote;
-                item.isConflict = parentLogic.status === 'Conflict';
-                item.conflictDetails = parentLogic.conflictDetails;
-                item.logicAEmbedding = null;
-                item.logicHash = parentLogic.embeddingHash || null;
-              }
-            }
+            const batchUnits = fileLogicUnits.slice(i, i + BATCH_SIZE);
 
-            if (!item.isCacheHit) {
-              try {
-                addLog(`    Analyzing: ${unit.title}`);
-                item.analysis = await analyzeLogicUnit(unit.title, unit.code);
-              } catch (err) {
-                addLog(`    Error analyzing ${unit.title}: ${err}`);
-                item.error = true;
+            await Promise.all(batchUnits.map(async (item) => {
+              const { unit, file, unitHash } = item;
+              const cachedNote = allNotes.find(n => n.noteType === 'Snapshot' && n.contentHash === unitHash && n.originPath === file.path);
+              
+              if (cachedNote) {
+                addLog(`    Cache Hit: Skipping AI analysis for ${unit.title}`);
+                const parentLogic = allNotes.find(n => n.noteType === 'Logic' && n.childNoteIds.includes(cachedNote.id));
+                if (parentLogic) {
+                  item.isCacheHit = true;
+                  item.cachedNote = cachedNote;
+                  item.parentLogic = parentLogic;
+                  item.businessLogic = {
+                    title: parentLogic.title,
+                    summary: parentLogic.summary,
+                    components: parentLogic.components,
+                    flow: parentLogic.flow,
+                    io: parentLogic.io
+                  };
+                  item.analysis = {
+                    title: cachedNote.title,
+                    summary: cachedNote.summary,
+                    components: cachedNote.components,
+                    flow: cachedNote.flow,
+                    io: cachedNote.io
+                  };
+                  item.caseType = '4-1';
+                  item.targetLogicB = parentLogic;
+                  item.targetSnapshotB = cachedNote;
+                  item.isConflict = parentLogic.status === 'Conflict';
+                  item.conflictDetails = parentLogic.conflictDetails;
+                  item.logicAEmbedding = null;
+                  item.logicHash = parentLogic.embeddingHash || null;
+                }
               }
-            }
+
+              if (!item.isCacheHit) {
+                try {
+                  addLog(`    Analyzing: ${unit.title}`);
+                  item.analysis = await analyzeLogicUnit(unit.title, unit.code);
+                } catch (err) {
+                  addLog(`    Error analyzing ${unit.title}: ${err}`);
+                  item.error = true;
+                }
+              }
+            }));
+            await new Promise(resolve => setTimeout(resolve, 500));
           }
 
           if (cancelSyncRef.current) break;
 
           // Phase 3: Generating Business Logic
           addLog(`  Phase 3: Generating Business Logic...`);
-          for (const item of fileLogicUnits) {
+          for (let i = 0; i < fileLogicUnits.length; i += BATCH_SIZE) {
             if (cancelSyncRef.current) break;
+            const batchUnits = fileLogicUnits.slice(i, i + BATCH_SIZE).filter(item => !item.isCacheHit && !item.error);
             
-            if (!item.isCacheHit && !item.error) {
-              try {
-                addLog(`    Translating: ${item.unit.title}`);
-                item.businessLogic = await translateToBusinessLogic({ title: item.unit.title, ...item.analysis });
-              } catch (err) {
-                addLog(`    Error translating ${item.unit.title}: ${err}`);
-                item.error = true;
-              }
+            if (batchUnits.length > 0) {
+              await Promise.all(batchUnits.map(async (item) => {
+                try {
+                  addLog(`    Translating: ${item.unit.title}`);
+                  item.businessLogic = await translateToBusinessLogic({ title: item.unit.title, ...item.analysis });
+                } catch (err) {
+                  addLog(`    Error translating ${item.unit.title}: ${err}`);
+                  item.error = true;
+                }
+              }));
+              await new Promise(resolve => setTimeout(resolve, 500));
             }
           }
 

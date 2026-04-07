@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { CoFounderProvider } from './contexts/CoFounderContext';
 import { signInWithGoogle, logout } from './firebase';
 import { Sidebar } from './components/Sidebar';
 import { NoteEditor } from './components/NoteEditor';
@@ -281,7 +282,7 @@ function MainApp() {
         </header>
         
         <div className="flex-1 overflow-auto p-0 sm:p-8 lg:p-12 bg-muted/5 relative">
-          <div className="max-w-6xl mx-auto w-full h-full">
+          <div className={`${viewMode === 'dashboard' ? 'max-w-none' : 'max-w-6xl'} mx-auto w-full h-full`}>
             <AnimatePresence mode="wait">
               <motion.div 
                 key={viewMode === 'dashboard' ? 'dashboard' : 'editor'}
@@ -368,7 +369,9 @@ function MainApp() {
 export default function App() {
   return (
     <AuthProvider>
-      <MainApp />
+      <CoFounderProvider>
+        <MainApp />
+      </CoFounderProvider>
     </AuthProvider>
   );
 }

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Note, CostEstimate, PitchDeck, CompetitorAnalysis, ProactiveNudge, LensType } from '../types';
 import { Layers, Blocks, Cpu, Code, AlertCircle, CheckCircle2, CircleDashed, Target, Loader2, X, Receipt, Cloud, Wrench, Zap, Presentation, FileText, Lightbulb, Users, Briefcase, Swords, Crosshair, ShieldAlert, Rocket, PlusCircle, Sparkles, MessageSquarePlus, ChevronRight, LayoutGrid, Map, Network } from 'lucide-react';
-import { scopeMVP, estimateProjectCost, generatePitchDeck, analyzeCompetitor, generateInitialBlueprint, generateProactiveNudges, addFeatureBlueprint, refineIdeaWithSparring } from '../services/gemini';
+import { ArchitectureRefinementModal } from './dashboard/ArchitectureRefinementModal';
+import { scopeMVP, estimateProjectCost, generatePitchDeck, analyzeCompetitor, generateInitialBlueprint, generateProactiveNudges, addFeatureBlueprint, refineIdeaWithSparring, generateDetailedBlueprint, refineBlueprintDraft } from '../services/gemini';
 import * as dbManager from '../services/dbManager';
 import { saveNoteToSync } from '../services/syncManager';
 import ReactMarkdown from 'react-markdown';
@@ -9,8 +10,10 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { motion, AnimatePresence } from 'motion/react';
 import { BentoView } from './dashboard/BentoView';
+import { useCoFounder } from '../contexts/CoFounderContext';
 import { JourneyView } from './dashboard/JourneyView';
 import { GalaxyView } from './dashboard/GalaxyView';
+import { BlueprintView } from './dashboard/BlueprintView';
 
 interface DashboardViewProps {
   projectId: string;
@@ -42,25 +45,35 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
   const [magicIdea, setMagicIdea] = useState('');
   const [isGeneratingMagic, setIsGeneratingMagic] = useState(false);
 
-  const [activeView, setActiveView] = useState<'bento' | 'journey' | 'galaxy'>('bento');
+  const [activeView, setActiveView] = useState<'bento' | 'journey' | 'galaxy' | 'blueprint'>('bento');
 
-  const [nudges, setNudges] = useState<ProactiveNudge[]>([]);
-  const [pastNudges, setPastNudges] = useState<string[]>([]);
-  const [loadingNudgeTypes, setLoadingNudgeTypes] = useState<('WhatIf' | 'Gap' | 'Constraint' | 'Inversion' | 'NextStep' | 'MissingPiece' | 'Growth' | 'EdgeCase')[]>([]);
-  const [isFetchingNudges, setIsFetchingNudges] = useState(false);
-  const [isCoFounderOpen, setIsCoFounderOpen] = useState(false);
-  const [applyingNudgeId, setApplyingNudgeId] = useState<string | null>(null);
+  // Refinement Modal State
+  const [showRefinementModal, setShowRefinementModal] = useState(false);
+  const [draftBlueprint, setDraftBlueprint] = useState<any>(null);
+  const [refiningNudge, setRefiningNudge] = useState<ProactiveNudge | null>(null);
+  const [isRefiningBlueprint, setIsRefiningBlueprint] = useState(false);
+  const [isFinalizingBlueprint, setIsFinalizingBlueprint] = useState(false);
+  const [generationProgressMsg, setGenerationProgressMsg] = useState('');
+
+  const {
+    nudges, setNudges,
+    pastNudges, setPastNudges,
+    loadingNudgeTypes, setLoadingNudgeTypes,
+    isFetchingNudges, setIsFetchingNudges,
+    isCoFounderOpen, setIsCoFounderOpen,
+    applyingNudgeId, setApplyingNudgeId
+  } = useCoFounder();
 
   const handleOpenCoFounder = async () => {
     setIsCoFounderOpen(true);
     if (nudges.length === 0 && notes.length > 0) {
       setIsFetchingNudges(true);
       try {
-        const [trackA, trackB] = await Promise.all([
-          generateProactiveNudges(notes, pastNudges, 'A'),
-          generateProactiveNudges(notes, pastNudges, 'B')
+        const [involutionNudges, evolutionNudges] = await Promise.all([
+          generateProactiveNudges(notes, pastNudges, 'Involution'),
+          generateProactiveNudges(notes, pastNudges, 'Evolution')
         ]);
-        setNudges([...trackA, ...trackB]);
+        setNudges([...involutionNudges, ...evolutionNudges]);
       } catch (e) {
         console.error(e);
       } finally {
@@ -73,11 +86,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
     setIsFetchingNudges(true);
     setNudges([]);
     try {
-      const [trackA, trackB] = await Promise.all([
-        generateProactiveNudges(notes, pastNudges, 'A'),
-        generateProactiveNudges(notes, pastNudges, 'B')
+      const [involutionNudges, evolutionNudges] = await Promise.all([
+        generateProactiveNudges(notes, pastNudges, 'Involution'),
+        generateProactiveNudges(notes, pastNudges, 'Evolution')
       ]);
-      setNudges([...trackA, ...trackB]);
+      setNudges([...involutionNudges, ...evolutionNudges]);
     } catch (e) {
       console.error(e);
     } finally {
@@ -87,9 +100,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
 
   // Fetch nudges automatically when entering Bento view if empty
   React.useEffect(() => {
-    if (activeView === 'bento' && nudges.length === 0 && notes.length > 0 && !isFetchingNudges) {
-      handleOpenCoFounder();
-    }
+    // Removed automatic nudge generation
   }, [activeView, notes.length]);
 
   const handleRejectNudge = async (nudgeId: string) => {
@@ -125,32 +136,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
   const handleSparringSubmit = async (nudge: ProactiveNudge, response: string) => {
     setApplyingNudgeId(nudge.id);
     try {
-      const refined = await refineIdeaWithSparring(notes, nudge, response);
-      
-      const newNote: Note = {
-        id: crypto.randomUUID(),
-        projectId,
-        title: refined.title,
-        summary: refined.content.substring(0, 50),
-        body: refined.content,
-        noteType: refined.noteType,
-        folder: refined.folder,
-        priority: refined.priority,
-        status: 'Planned',
-        parentNoteIds: [],
-        childNoteIds: [],
-        relatedNoteIds: [],
-        uid: 'local',
-        createdAt: new Date(),
-        lastUpdated: new Date()
-      };
-
-      const updatedNotes = [...notes, newNote];
-      saveNoteToSync(newNote);
-      if (onNotesChanged) onNotesChanged();
-      
-      // Remove the nudge after successful sparring
-      setNudges(prev => prev.filter(n => n.id !== nudge.id));
+      const blueprint = await refineIdeaWithSparring(notes, nudge, response);
+      if (blueprint && blueprint.domains && blueprint.domains.length > 0) {
+        setDraftBlueprint(blueprint);
+        setRefiningNudge(nudge);
+        setShowRefinementModal(true);
+      }
     } catch (error) {
       console.error("Failed to refine idea with sparring:", error);
       alert("아이디어 구체화에 실패했습니다. 다시 시도해주세요.");
@@ -162,87 +153,124 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
   const handleAcceptNudge = async (nudge: ProactiveNudge) => {
     setApplyingNudgeId(nudge.id);
     try {
-      const blueprint = await addFeatureBlueprint(nudge.actionPrompt, notes);
-      
+      const blueprint = await addFeatureBlueprint(nudge, notes);
       if (blueprint && blueprint.domains && blueprint.domains.length > 0) {
-        const newNotes: Note[] = [];
-        
-        for (const domain of blueprint.domains) {
-          const domainId = crypto.randomUUID();
-          const domainChildIds: string[] = [];
-          
-          if (domain.modules) {
-            for (const mod of domain.modules) {
-              const moduleId = crypto.randomUUID();
-              const moduleChildIds: string[] = [];
-              domainChildIds.push(moduleId);
-
-              if (mod.logics) {
-                for (const logic of mod.logics) {
-                  const logicId = crypto.randomUUID();
-                  moduleChildIds.push(logicId);
-                  
-                  newNotes.push({
-                    id: logicId,
-                    projectId,
-                    title: logic.title,
-                    content: '',
-                    noteType: 'Logic',
-                    parentNoteIds: [moduleId],
-                    childNoteIds: [],
-                    summary: logic.summary,
-                    status: 'Planned',
-                    priority: 'P3',
-                    createdAt: Date.now(),
-                    updatedAt: Date.now()
-                  } as any);
-                }
-              }
-
-              newNotes.push({
-                id: moduleId,
-                projectId,
-                title: mod.title,
-                content: '',
-                noteType: 'Module',
-                parentNoteIds: [domainId],
-                childNoteIds: moduleChildIds,
-                summary: mod.summary,
-                status: 'Planned',
-                priority: 'P3',
-                createdAt: Date.now(),
-                updatedAt: Date.now()
-              } as any);
-            }
-          }
-
-          newNotes.push({
-            id: domainId,
-            projectId,
-            title: domain.title,
-            content: '',
-            noteType: 'Domain',
-            parentNoteIds: [],
-            childNoteIds: domainChildIds,
-            summary: domain.summary,
-            status: 'Planned',
-            priority: 'P3',
-            createdAt: Date.now(),
-            updatedAt: Date.now()
-          } as any);
-        }
-
-        await dbManager.bulkSaveNotes(newNotes);
-        if (onNotesChanged) onNotesChanged();
-        
-        // Remove applied nudge
-        setNudges(prev => prev.filter(n => n.id !== nudge.id));
+        setDraftBlueprint(blueprint);
+        setRefiningNudge(nudge);
+        setShowRefinementModal(true);
       }
     } catch (error) {
-      console.error("Failed to apply nudge:", error);
-      alert("아이디어 적용에 실패했습니다: " + (error as Error).message);
+      console.error("Failed to generate blueprint:", error);
+      alert("설계도 생성에 실패했습니다.");
     } finally {
       setApplyingNudgeId(null);
+    }
+  };
+
+  const handleRefineBlueprint = async (feedback: string) => {
+    if (!draftBlueprint) return;
+    setIsRefiningBlueprint(true);
+    try {
+      const refined = await refineBlueprintDraft(draftBlueprint, feedback);
+      setDraftBlueprint(refined);
+    } catch (error) {
+      console.error("Failed to refine blueprint:", error);
+      alert("설계 수정에 실패했습니다.");
+    } finally {
+      setIsRefiningBlueprint(false);
+    }
+  };
+
+  const handleFinalizeBlueprint = async (finalBlueprint: any) => {
+    setIsFinalizingBlueprint(true);
+    setGenerationProgressMsg('아키텍처 상세화 시작...');
+    try {
+      const detailed = await generateDetailedBlueprint(finalBlueprint, (msg) => {
+        setGenerationProgressMsg(msg);
+      });
+
+      const newNotes: Note[] = [];
+      for (const domain of detailed.domains) {
+        const domainId = crypto.randomUUID();
+        const domainChildIds: string[] = [];
+        
+        if (domain.modules) {
+          for (const mod of domain.modules) {
+            const moduleId = crypto.randomUUID();
+            const moduleChildIds: string[] = [];
+            domainChildIds.push(moduleId);
+
+            if (mod.logics) {
+              for (const logic of mod.logics) {
+                const logicId = crypto.randomUUID();
+                moduleChildIds.push(logicId);
+                
+                newNotes.push({
+                  id: logicId,
+                  projectId,
+                  title: logic.title,
+                  content: logic.content || '',
+                  noteType: 'Logic',
+                  parentNoteIds: [moduleId],
+                  childNoteIds: [],
+                  summary: logic.summary,
+                  status: 'Planned',
+                  priority: 'P3',
+                  createdAt: Date.now(),
+                  updatedAt: Date.now()
+                } as any);
+              }
+            }
+
+            newNotes.push({
+              id: moduleId,
+              projectId,
+              title: mod.title,
+              content: mod.content || '',
+              noteType: 'Module',
+              parentNoteIds: [domainId],
+              childNoteIds: moduleChildIds,
+              summary: mod.summary,
+              status: 'Planned',
+              priority: 'P3',
+              createdAt: Date.now(),
+              updatedAt: Date.now()
+            } as any);
+          }
+        }
+
+        newNotes.push({
+          id: domainId,
+          projectId,
+          title: domain.title,
+          content: domain.content || '',
+          noteType: 'Domain',
+          parentNoteIds: [],
+          childNoteIds: domainChildIds,
+          summary: domain.summary,
+          status: 'Planned',
+          priority: 'P3',
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        } as any);
+      }
+
+      await dbManager.bulkSaveNotes(newNotes);
+      if (onNotesChanged) onNotesChanged();
+      
+      // Remove nudge after success
+      if (refiningNudge) {
+        setNudges(prev => prev.filter(n => n.id !== refiningNudge.id));
+      }
+      setShowRefinementModal(false);
+      setDraftBlueprint(null);
+      setRefiningNudge(null);
+    } catch (error) {
+      console.error("Failed to finalize blueprint:", error);
+      alert("최종 적용에 실패했습니다.");
+    } finally {
+      setIsFinalizingBlueprint(false);
+      setGenerationProgressMsg('');
     }
   };
 
@@ -251,77 +279,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
     setIsGeneratingMagic(true);
     try {
       const blueprint = await generateInitialBlueprint(magicIdea.trim());
-      
       if (blueprint && blueprint.domains && blueprint.domains.length > 0) {
-        const newNotes: Note[] = [];
-        
-        for (const domain of blueprint.domains) {
-          const domainId = crypto.randomUUID();
-          const domainChildIds: string[] = [];
-          
-          if (domain.modules) {
-            for (const mod of domain.modules) {
-              const moduleId = crypto.randomUUID();
-              const moduleChildIds: string[] = [];
-              domainChildIds.push(moduleId);
-
-              if (mod.logics) {
-                for (const logic of mod.logics) {
-                  const logicId = crypto.randomUUID();
-                  moduleChildIds.push(logicId);
-                  
-                  newNotes.push({
-                    id: logicId,
-                    projectId,
-                    title: logic.title,
-                    content: '',
-                    noteType: 'Logic',
-                    parentNoteIds: [moduleId],
-                    childNoteIds: [],
-                    summary: logic.summary,
-                    status: 'Planned',
-                    priority: 'P3',
-                    createdAt: Date.now(),
-                    updatedAt: Date.now()
-                  } as any);
-                }
-              }
-
-              newNotes.push({
-                id: moduleId,
-                projectId,
-                title: mod.title,
-                content: '',
-                noteType: 'Module',
-                parentNoteIds: [domainId],
-                childNoteIds: moduleChildIds,
-                summary: mod.summary,
-                status: 'Planned',
-                priority: 'P3',
-                createdAt: Date.now(),
-                updatedAt: Date.now()
-              } as any);
-            }
-          }
-
-          newNotes.push({
-            id: domainId,
-            projectId,
-            title: domain.title,
-            content: '',
-            noteType: 'Domain',
-            parentNoteIds: [],
-            childNoteIds: domainChildIds,
-            summary: domain.summary,
-            status: 'Planned',
-            priority: 'P3',
-            createdAt: Date.now(),
-            updatedAt: Date.now()
-          } as any);
-        }
-
-        await dbManager.bulkSaveNotes(newNotes);
-        if (onNotesChanged) onNotesChanged();
+        setDraftBlueprint(blueprint);
+        setRefiningNudge(null);
+        setShowRefinementModal(true);
+        setMagicIdea('');
       }
     } catch (error) {
       console.error("Magic Start failed:", error);
@@ -545,6 +507,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
           >
             <Network size={16} /> Galaxy
           </button>
+          <button 
+            onClick={() => setActiveView('blueprint')}
+            className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-bold flex items-center gap-1.5 md:gap-2 transition-all whitespace-nowrap ${activeView === 'blueprint' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            <Layers size={16} /> Blueprint
+          </button>
         </div>
       </div>
 
@@ -552,14 +520,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
         {activeView === 'bento' && (
           <BentoView 
             notes={notes} 
-            nudges={nudges} 
-            isFetchingNudges={isFetchingNudges} 
-            loadingNudgeTypes={loadingNudgeTypes}
             onAcceptNudge={handleAcceptNudge} 
             onSparringSubmit={handleSparringSubmit}
             onRejectNudge={handleRejectNudge}
             onRerollAllNudges={handleRerollAllNudges}
-            applyingNudgeId={applyingNudgeId}
             onOpenAction={handleActionOpen}
           />
         )}
@@ -583,7 +547,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ projectId, notes, 
             </div>
           </div>
         )}
+        {activeView === 'blueprint' && (
+          <BlueprintView notes={notes} onSelectNote={onSelectNote} />
+        )}
       </div>
+
+      <ArchitectureRefinementModal
+        isOpen={showRefinementModal}
+        onClose={() => setShowRefinementModal(false)}
+        blueprint={draftBlueprint}
+        onRefine={handleRefineBlueprint}
+        onFinalize={handleFinalizeBlueprint}
+        isRefining={isRefiningBlueprint}
+        isFinalizing={isFinalizingBlueprint}
+        progressMessage={generationProgressMsg}
+      />
 
       {showScopingModal && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">

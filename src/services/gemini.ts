@@ -8,42 +8,43 @@ const PRO_MODEL = "gemini-3.1-flash-lite-preview";
 
 // Phase 0: Market-Fit Validator (초기 뼈대 자동 생성)
 export const generateInitialBlueprint = async (businessIdea: string) => {
-  const prompt = `당신은 세계 최고의 비즈니스 아키텍트이자 AI 코파운더입니다.
-사용자가 제시한 비즈니스 아이디어를 분석하여, MVP(최소 기능 제품) 런칭을 위한 최적의 시스템 구조(Domain, Module, Logic)를 설계하세요.
+  const prompt = `당신은 비전공자 창업자를 돕는 세계 최고의 비즈니스 파트너이자 기술 가이드입니다.
+사용자의 비즈니스 아이디어를 바탕으로 서비스의 초기 설계도(Blueprint)를 작성하세요.
 
-[비즈니스 아이디어]
+[사용자 아이디어]
 ${businessIdea}
 
-[설계 규칙]
-1. Domain: 비즈니스의 최상위 개념 (예: '사용자 계정 시스템', '커머스 결제 시스템')
-2. Module: 도메인을 구성하는 기능적 그룹 (예: '소셜 로그인', '장바구니')
-3. Logic: 사용자가 체감하는 실제 서비스 단위 (예: '중복 아이디 가입 방지')
-4. **언어 및 직관성**: 모든 제목(title)과 요약(summary)은 **한국어**로 작성하며, 개발 지식이 없는 사람도 한눈에 이해할 수 있도록 **매우 직관적이고 쉬운 단어**를 사용하세요.
-5. MVP 스코핑: 당장 첫 달에 필수적인 기능(Must-have)만 포함하세요. (Nice-to-have는 제외)
-6. 각 노드는 title, summary, type('Domain', 'Module', 'Logic')을 가져야 합니다.
-7. 계층 구조를 명확히 하기 위해, Domain 안에 Module 배열이 있고, Module 안에 Logic 배열이 있는 중첩된 JSON 구조로 반환하세요.
+[작성 지침 - 매우 중요]
+1. 비전공자도 한눈에 이해할 수 있도록 아주 쉬운 일상 언어를 사용하세요.
+2. '도메인', '모듈', '로직', 'DB', 'API', '캐싱' 같은 기술 용어는 절대 사용하지 마세요.
+   - Domain -> '주요 영역' (예: '사용자 정보와 로그인')
+   - Module -> '세부 기능' (예: '프로필 편집하기')
+   - Logic -> '핵심 규칙' (예: '사진 용량 줄여서 저장하기')
+3. 각 항목의 제목과 요약은 '이 기능이 왜 필요한지'와 '사용자가 얻는 이득'이 드러나게 작성하세요.
+4. 구조는 반드시 domains -> modules -> logics 계층 구조여야 합니다.
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {
   "domains": [
     {
-      "title": "직관적인 한국어 도메인 제목",
-      "summary": "한국어 도메인 요약",
+      "title": "...",
+      "summary": "...",
       "modules": [
         {
-          "title": "직관적인 한국어 모듈 제목",
-          "summary": "한국어 모듈 요약",
+          "title": "...",
+          "summary": "...",
           "logics": [
             {
-              "title": "직관적인 한국어 로직 제목",
-              "summary": "한국어 로직 요약"
+              "title": "...",
+              "summary": "..."
             }
           ]
         }
       ]
     }
   ]
-}`;
+}
+`;
 
   const responsePromise = ai.models.generateContent({
     model: PRO_MODEL,
@@ -764,7 +765,171 @@ ${notes.map(n => `ID: ${n.id} | Type: ${n.noteType} | Title: ${n.title} | Summar
   }
 };
 
-// Phase 6: Code-to-Cost (Burn Rate Estimator)
+// Phase 7: Context-Aware Hierarchical Generation & Refinement
+export const refineBlueprintDraft = async (draft: any, feedback: string) => {
+  const prompt = `당신은 비전공자 창업자를 돕는 친절한 기술 파트너입니다.
+현재 초안으로 작성된 설계도(Blueprint)가 있습니다. 사용자의 피드백을 반영하여 이 설계도를 수정/보완하세요.
+
+[현재 설계도 초안]
+${JSON.stringify(draft, null, 2)}
+
+[사용자 피드백]
+${feedback}
+
+[작성 지침 - 매우 중요]
+1. 비전공자도 이해할 수 있도록 아주 쉬운 일상 언어를 유지하세요.
+2. 전문 용어보다는 기능의 목적과 효과를 중심으로 설명하세요.
+3. 사용자의 피드백을 적극 반영하여 영역, 기능, 규칙을 추가, 수정, 또는 삭제하세요.
+4. 기존의 JSON 구조(domains -> modules -> logics)를 반드시 유지하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "domains": [
+    {
+      "title": "...",
+      "summary": "...",
+      "modules": [
+        {
+          "title": "...",
+          "summary": "...",
+          "logics": [
+            {
+              "title": "...",
+              "summary": "..."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}`;
+
+  const responsePromise = ai.models.generateContent({
+    model: PRO_MODEL,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          domains: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                modules: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING },
+                      summary: { type: Type.STRING },
+                      logics: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            title: { type: Type.STRING },
+                            summary: { type: Type.STRING }
+                          },
+                          required: ["title", "summary"]
+                        }
+                      }
+                    },
+                    required: ["title", "summary", "logics"]
+                  }
+                }
+              },
+              required: ["title", "summary", "modules"]
+            }
+          }
+        },
+        required: ["domains"]
+      }
+    }
+  });
+
+  const response = await withTimeout(responsePromise, 60000, { text: JSON.stringify(draft) } as any);
+  try {
+    return JSON.parse(response.text || "{}");
+  } catch (e) {
+    console.error("Failed to refine blueprint draft", e);
+    return draft;
+  }
+};
+
+export const generateDetailedNodeContent = async (nodeType: string, title: string, summary: string, parentContext: string, siblingContext: string) => {
+  const prompt = `당신은 비전공자 창업자를 돕는 친절한 기술 가이드입니다.
+다음 항목에 대한 상세 설명과 작동 규칙을 작성해주세요.
+
+제목: ${title}
+요약: ${summary}
+유형: ${nodeType}
+
+[주변 맥락]
+- 상위 영역: ${parentContext || '없음'}
+- 함께 있는 다른 기능들: ${siblingContext || '없음'}
+
+[작성 지침 - 매우 중요]
+1. 초등학생도 이해할 수 있을 정도로 쉬운 비유와 일상 언어를 사용하세요.
+2. 기술적인 구현 방법(코드, DB 구조 등)보다는 '이 기능이 사용자에게 어떤 경험을 주는지'와 '어떤 규칙으로 움직이는지'를 중심으로 설명하세요.
+3. '모듈', '컴포넌트', '엔드포인트', '인스턴스' 같은 단어는 절대 사용하지 마세요.
+4. 마크다운 형식을 사용하여 읽기 좋게 구성하세요.
+5. 다른 기능들과 역할이 겹치지 않도록 이 기능만의 고유한 역할을 설명하세요.
+`;
+
+  const responsePromise = ai.models.generateContent({
+    model: MODEL,
+    contents: prompt,
+  });
+
+  const response = await withTimeout(responsePromise, 45000, { text: `${summary}\n\n(상세 내용 생성 실패)` } as any);
+  return response.text || summary;
+};
+
+export const generateDetailedBlueprint = async (blueprint: any, onProgress?: (msg: string) => void) => {
+  const detailedDomains = [];
+
+  for (const domain of blueprint.domains) {
+    if (onProgress) onProgress(`도메인 상세화 중: ${domain.title}`);
+    const domainSiblingContext = blueprint.domains.filter((d: any) => d.title !== domain.title).map((d: any) => `- ${d.title}: ${d.summary}`).join('\n');
+    const domainContent = await generateDetailedNodeContent('Domain', domain.title, domain.summary, '전체 시스템 아키텍처', domainSiblingContext);
+
+    const detailedModules = [];
+    if (domain.modules) {
+      if (onProgress) onProgress(`모듈 상세화 중 (${domain.modules.length}개 병렬 처리)...`);
+      // 병렬 처리로 속도 향상
+      const modulePromises = domain.modules.map(async (mod: any) => {
+        const modParentContext = `상위 도메인: ${domain.title} (${domain.summary})`;
+        const modSiblingContext = domain.modules.filter((m: any) => m.title !== mod.title).map((m: any) => `- ${m.title}: ${m.summary}`).join('\n');
+        const modContent = await generateDetailedNodeContent('Module', mod.title, mod.summary, modParentContext, modSiblingContext);
+
+        const detailedLogics = [];
+        if (mod.logics) {
+          // 로직도 병렬 처리
+          const logicPromises = mod.logics.map(async (logic: any) => {
+            const logicParentContext = `상위 도메인: ${domain.title}\n상위 모듈: ${mod.title} (${mod.summary})`;
+            const logicSiblingContext = mod.logics.filter((l: any) => l.title !== logic.title).map((l: any) => `- ${l.title}: ${l.summary}`).join('\n');
+            const logicContent = await generateDetailedNodeContent('Logic', logic.title, logic.summary, logicParentContext, logicSiblingContext);
+            return { ...logic, content: logicContent };
+          });
+          const resolvedLogics = await Promise.all(logicPromises);
+          detailedLogics.push(...resolvedLogics);
+        }
+        return { ...mod, content: modContent, logics: detailedLogics };
+      });
+
+      const resolvedModules = await Promise.all(modulePromises);
+      detailedModules.push(...resolvedModules);
+    }
+    detailedDomains.push({ ...domain, content: domainContent, modules: detailedModules });
+  }
+
+  return { domains: detailedDomains };
+};
+
 export const estimateProjectCost = async (notes: Note[]) => {
   const prompt = `당신은 세계 최고의 클라우드 아키텍트이자 재무 책임자(CFO)입니다.
 현재 기획된 시스템(특히 P1, P2 우선순위의 Module, Logic)을 분석하여, 이 MVP를 런칭하고 초기 1개월간 운영할 때 예상되는 인프라 및 API 비용(Burn Rate)을 추정하세요.
@@ -1056,28 +1221,46 @@ ${notes.map(n => `Type: ${n.noteType} | Title: ${n.title} | Summary: ${n.summary
 
 // Phase 9: Proactive AI Co-founder (Continuous Ideation)
 export const refineIdeaWithSparring = async (notes: Note[], nudge: ProactiveNudge, userResponse: string) => {
-  const prompt = `당신은 사용자의 아이디어를 구체화하는 AI Co-founder입니다.
-사용자가 당신의 도발적인 질문(Nudge)에 대해 반박하거나 새로운 아이디어를 제시했습니다.
-사용자의 응답을 바탕으로, 실제 시스템에 추가할 수 있는 구체적인 기획안(Note)을 작성하세요.
+  const prompt = `당신은 비전공자 창업자를 돕는 친절한 기술 파트너입니다.
+사용자가 당신의 제안(Nudge)에 대해 피드백을 주었습니다. 사용자의 응답을 바탕으로, 실제 시스템에 추가할 수 있는 구체적인 설계도(Blueprint)를 작성하세요.
 
-[AI의 도발적 질문 (Nudge)]
-타입: ${nudge.nudgeType}
-질문: ${nudge.question}
+[AI의 초기 제안 및 가설]
+- 타입: ${nudge.nudgeType}
+- 질문: ${nudge.question}
+- 가설: ${nudge.hypothesis}
 
-[사용자의 반응 (Sparring)]
+[사용자의 피드백]
 "${userResponse}"
 
-[현재 시스템의 노트들]
-${notes.map(n => `Title: ${n.title}`).join('\n')}
+[현재 프로젝트 상태]
+${notes.map(n => `- ${n.title} (${n.noteType})`).join('\n')}
 
-위 내용을 바탕으로, 사용자의 의도를 완벽하게 반영한 새로운 모듈(Note)을 설계하세요.
+[작성 지침 - 매우 중요]
+1. 비전공자도 이해할 수 있도록 아주 쉬운 일상 언어를 사용하세요.
+2. 기술 용어 대신 기능의 목적과 사용자 가치를 중심으로 설명하세요.
+3. 제목과 요약은 직관적이어야 하며, 사용자의 의도를 완벽하게 반영해야 합니다.
+4. 구조는 반드시 domains -> modules -> logics 계층 구조여야 합니다.
+
 반드시 아래 JSON 형식으로만 응답하세요:
 {
-  "title": "모듈 이름 (예: VIP 구독 결제 시스템)",
-  "content": "사용자의 의도가 반영된 구체적인 기능 설명 및 비즈니스 로직",
-  "folder": "적절한 도메인 분류 (예: Monetization, Core, Growth 등)",
-  "priority": "P1" | "P2" | "P3",
-  "noteType": "Domain" | "Module" | "Logic"
+  "domains": [
+    {
+      "title": "...",
+      "summary": "...",
+      "modules": [
+        {
+          "title": "...",
+          "summary": "...",
+          "logics": [
+            {
+              "title": "...",
+              "summary": "..."
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }
 `;
 
@@ -1089,98 +1272,140 @@ ${notes.map(n => `Title: ${n.title}`).join('\n')}
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          title: { type: Type.STRING },
-          content: { type: Type.STRING },
-          folder: { type: Type.STRING },
-          priority: { type: Type.STRING },
-          noteType: { type: Type.STRING }
+          domains: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                modules: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING },
+                      summary: { type: Type.STRING },
+                      logics: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            title: { type: Type.STRING },
+                            summary: { type: Type.STRING }
+                          },
+                          required: ["title", "summary"]
+                        }
+                      }
+                    },
+                    required: ["title", "summary", "logics"]
+                  }
+                }
+              },
+              required: ["title", "summary", "modules"]
+            }
+          }
         },
-        required: ["title", "content", "folder", "priority", "noteType"]
+        required: ["domains"]
       }
     }
   });
 
-  const response = await withTimeout(responsePromise, 60000, { text: "{}" } as any);
+  const response = await withTimeout(responsePromise, 60000, { text: "[]" } as any);
   if (!response || !response.text) {
     throw new Error("Failed to refine idea with sparring.");
   }
 
   try {
     const jsonStr = response.text.trim();
-    return JSON.parse(jsonStr) as { title: string, content: string, folder: string, priority: 'P1'|'P2'|'P3', noteType: 'Domain'|'Module'|'Logic' };
+    return JSON.parse(jsonStr) as {
+      domains: {
+        title: string;
+        summary: string;
+        modules: {
+          title: string;
+          summary: string;
+          logics: { title: string; summary: string; }[];
+        }[];
+      }[];
+    };
   } catch (e) {
-    console.error("Failed to parse Refined Idea JSON", e);
+    console.error("Failed to parse Feature Blueprint JSON", e);
     throw new Error("Invalid JSON format from AI.");
   }
 };
-export const generateProactiveNudges = async (notes: Note[], pastNudges: string[] = [], track: 'A' | 'B', targetType?: string) => {
-  const lenses = [
-    "Gen-Z 타겟", "극단적 미니멀리즘", "게이미피케이션", "하드코어 B2B", 
-    "블록체인/Web3", "오프라인 결합", "10배 비싼 프리미엄", "로컬 커뮤니티 기반",
-    "구독형 모델", "일회성 이벤트", "AI 완전 자동화", "수동/장인정신"
-  ];
-  
-  const randomLenses = lenses.sort(() => 0.5 - Math.random()).slice(0, 3);
-
+export const generateProactiveNudges = async (notes: Note[], pastNudges: string[] = [], track: 'Involution' | 'Evolution', targetType?: string) => {
   let typeInstruction = '';
   let typeDefinitions = '';
   let allowedTypes = '';
 
-  if (track === 'A') {
+  if (track === 'Involution') {
     typeInstruction = targetType 
-      ? `반드시 '${targetType}' 타입의 실무적인 제안 1개를 생성하세요.`
-      : `반드시 4가지 타입(NextStep, MissingPiece, Growth, EdgeCase) 각각에 대해 1개씩, 총 4개의 실무적인 제안(Nudge)을 생성하세요.`;
+      ? `반드시 '${targetType}' 타입의 내적 최적화 제안 1개를 생성하세요.`
+      : `반드시 4가지 타입(Cost, Debt, EdgeCase, Efficiency) 각각에 대해 1개씩, 총 4개의 내적 최적화(Involution) 제안을 생성하세요.`;
     
-    typeDefinitions = `[4가지 Nudge 타입 정의 (Track A: 실무/기획 제안)]
-1. NextStep (다음 논리적 단계): "현재 'A' 모듈이 있네요. 자연스러운 다음 단계로 [B] 모듈을 추가할까요?"
-2. MissingPiece (누락된 필수 기능): "C 도메인은 설계되었는데, [D 로직]이 비어있습니다. 추가하시겠습니까?"
-3. Growth (성장 및 수익화): "리텐션을 높이기 위해 [E 프로모션 로직]이나 [F 보상 시스템]을 도입해 보는 건 어떨까요?"
-4. EdgeCase (예외 처리): "유저가 G 행동을 했을 때의 [H 예외 처리 로직]이 필요해 보입니다."`;
+    typeDefinitions = `[4가지 Nudge 타입 정의 (Track: Involution - 내적 최적화)]
+1. Cost (비용 최적화): "Firebase 읽기/쓰기 비용을 줄이기 위해 [A 로직]에 캐싱 계층을 도입하는 것은 어떨까요?"
+2. Debt (기술 부채 해결): "현재 [B 모듈]의 구조가 확장성에 제약이 될 수 있습니다. [C 패턴]으로 리팩토링할까요?"
+3. EdgeCase (예외/오류 처리): "유저가 [D 상황]에 처했을 때의 예외 처리가 누락되어 있습니다. 이를 보완할까요?"
+4. Efficiency (알고리즘/성능 효율화): "[E 기능]의 처리 속도를 높이기 위해 [F 최적화 기법]을 적용해볼 수 있습니다."`;
     
-    allowedTypes = `"NextStep" | "MissingPiece" | "Growth" | "EdgeCase"`;
+    allowedTypes = `"Cost" | "Debt" | "EdgeCase" | "Efficiency"`;
   } else {
     typeInstruction = targetType 
-      ? `반드시 '${targetType}' 타입의 도발적인 질문(Nudge) 1개를 생성하세요.`
-      : `반드시 4가지 타입(WhatIf, Gap, Constraint, Inversion) 각각에 대해 1개씩, 총 4개의 도발적인 질문(Nudge)을 생성하세요.`;
+      ? `반드시 '${targetType}' 타입의 거대한 임팩트 제안 1개를 생성하세요.`
+      : `반드시 4가지 타입(AhaMoment, HighImpact, Pivot, Expansion) 각각에 대해 1개씩, 총 4개의 외적 성장(Evolution) 제안을 생성하세요.`;
     
-    typeDefinitions = `[4가지 Nudge 타입 정의 (Track B: 비전/피벗 제안)]
-1. WhatIf (극단적 비유): "만약 이 앱을 틴더처럼 만든다면?", "링크드인처럼 전문가 네트워크로 푼다면?"
-2. Gap (구조적 공백): "결제는 있는데 환불이 없네요?", "유저가 내일 다시 올 이유(Retention)가 없네요?"
-3. Constraint (강제 제약): "내일 당장 1개 기능만 런칭해야 한다면?", "예산이 0원이라면?"
-4. Inversion (역발상): "이 프로젝트를 가장 빠르고 확실하게 망하게 하려면?"`;
+    typeDefinitions = `[4가지 Nudge 타입 정의 (Track: Evolution - 외적 임팩트)]
+토스의 철학("임팩트 없는 디테일은 낭비다")을 반영하여, 사소한 UI 개선이 아닌 제품의 성패를 가를 거대한 변화를 제안하세요.
+1. AhaMoment (아하 모먼트): "유저가 이 서비스를 반드시 써야만 하는 결정적 순간을 만들기 위해 [A 기능]을 도입합시다."
+2. HighImpact (핵심 지표 10배 성장): "사소한 개선 대신, 지표를 폭발적으로 성장시킬 수 있는 [B 비즈니스 모델/기능]을 추가하는 것은 어떨까요?"
+3. Pivot (관점의 전환): "현재 [C 타겟]에 머물러 있는데, 이를 [D 시장]으로 확장하여 완전히 새로운 가치를 창출해봅시다."
+4. Expansion (생태계 확장): "단순한 유틸리티를 넘어, 유저들이 상호작용하는 [E 커뮤니티/플랫폼]으로 진화시켜야 합니다."`;
     
-    allowedTypes = `"WhatIf" | "Gap" | "Constraint" | "Inversion"`;
+    allowedTypes = `"AhaMoment" | "HighImpact" | "Pivot" | "Expansion"`;
   }
 
   const blacklistInstruction = pastNudges.length > 0
     ? `\n[주의: 다음 아이디어들은 이미 사용자가 거절했거나 검토한 내용이므로 **절대 중복해서 제안하지 마세요**]\n${pastNudges.map(n => `- ${n}`).join('\n')}\n`
     : '';
 
-  const prompt = `당신은 사용자의 아이디어를 자극하고 시스템을 발전시키는 AI Co-founder입니다.
-사용자의 프로젝트 노트들을 분석하여, ${track === 'A' ? '당장 개발해야 할 구체적인 기능이나 로직을 제안하세요.' : '정답을 주지 말고 사용자가 반박하거나 영감을 얻을 수 있는 도발적인 질문을 생성하세요.'}
+  const systemContext = notes.map(n => {
+    let text = `[${n.noteType}] ${n.title} (Status: ${n.status})`;
+    if (n.summary) text += `\n  Summary: ${n.summary}`;
+    if (n.flow) text += `\n  Flow: ${n.flow}`;
+    return text;
+  }).join('\n\n');
+
+  const prompt = `당신은 비전공자 창업자를 돕는 세계 최고의 비즈니스 파트너이자 AI 코파운더입니다.
+단순히 기술적인 조언을 하는 것이 아니라, 사용자의 프로젝트를 깊이 있게 분석하여 누구나 이해할 수 있는 쉬운 언어로 실질적인 조언을 제공해야 합니다.
+
+${track === 'Involution' ? '현재 서비스가 더 빠르고 안정적으로 돌아가기 위한 내실을 다지는 제안을 하세요.' : '사소한 기능 개선이 아닌, 서비스의 성패를 결정지을 수 있는 거대한 변화와 성장을 위한 제안을 하세요.'}
 
 ${typeInstruction}
-
-[랜덤 관점 (Lens)]
-이번 생성에는 다음 관점들을 적극적으로 반영하여 뻔하지 않은 제안을 만드세요:
-${randomLenses.join(', ')}
 ${blacklistInstruction}
 ${typeDefinitions}
 
-[현재 시스템]
-${notes.map(n => `Type: ${n.noteType} | Status: ${n.status} | Title: ${n.title}`).join('\n')}
+[작성 지침 - 매우 중요]
+1. 비전공자도 한눈에 이해할 수 있도록 아주 쉬운 일상 언어를 사용하세요.
+2. '캐싱', '리팩토링', 'API', '인프라' 같은 기술 용어는 절대 사용하지 마세요. 대신 '정보 임시 저장', '구조 개선', '연결 통로' 등으로 풀어서 설명하세요.
+3. 제안의 핵심은 '사용자가 얻는 가치'와 '비즈니스적 이득'이어야 합니다.
+4. 가설(hypothesis) 부분은 "이 기능을 추가하면 [A]라는 문제가 해결되고, 결과적으로 [B]라는 이득이 생깁니다"라는 논리 구조로 작성하세요.
 
-반드시 아래 JSON 형식으로만 응답하세요:
+[현재 프로젝트 전체 설계 요약]
+${systemContext}
+
+반드시 아래 JSON 형식으로만 응답하세요.
 {
   "nudges": [
     {
-      "id": "고유문자열",
+      "id": "고유 ID",
       "nudgeType": ${allowedTypes},
       "track": "${track}",
-      "context": "현재 상황에 대한 짧은 진단 (예: 현재는 사용자가 혼자 쓰는 툴이네요.)",
-      "question": "${track === 'A' ? '구체적인 기능 추가 제안 (예: 회원가입 모듈이 있으니 소셜 로그인 연동을 추가할까요?)' : '도발적이고 극단적인 질문 (예: 만약 이 앱을 틴더처럼 유저끼리 스와이프해서 매칭되게 만든다면 어떨까요?)'}",
-      "keywords": ["#키워드1", "#키워드2", "#키워드3"],
-      "actionPrompt": "이 아이디어를 시스템에 추가하기 위한 프롬프트"
+      "context": "현재 상황에 대한 쉬운 진단 (1문장)",
+      "question": "사용자에게 던지는 핵심 질문 (1문장, 예: '결제 과정을 더 단순하게 줄여볼까요?')",
+      "hypothesis": "이 제안을 선택했을 때의 기대 효과 (비전공자도 이해할 수 있는 쉬운 설명)",
+      "actionPrompt": "이 아이디어를 시스템에 추가하기 위한 구체적인 행동 지침"
     }
   ]
 }
@@ -1201,12 +1426,12 @@ ${notes.map(n => `Type: ${n.noteType} | Status: ${n.status} | Title: ${n.title}`
               properties: {
                 id: { type: Type.STRING },
                 nudgeType: { type: Type.STRING },
-          context: { type: Type.STRING },
+                context: { type: Type.STRING },
                 question: { type: Type.STRING },
-                keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+                hypothesis: { type: Type.STRING },
                 actionPrompt: { type: Type.STRING }
               },
-              required: ["id", "nudgeType", "context", "question", "keywords", "actionPrompt"]
+              required: ["id", "nudgeType", "context", "question", "hypothesis", "actionPrompt"]
             }
           }
         },
@@ -1233,15 +1458,46 @@ ${notes.map(n => `Type: ${n.noteType} | Status: ${n.status} | Title: ${n.title}`
   }
 };
 
-export const addFeatureBlueprint = async (idea: string, notes: Note[]) => {
-  const prompt = `당신은 최고 수준의 소프트웨어 아키텍트입니다.
-사용자가 다음 아이디어를 기존 시스템에 추가하려고 합니다: "${idea}"
+export const addFeatureBlueprint = async (nudge: ProactiveNudge, notes: Note[]) => {
+  const prompt = `당신은 비전공자 창업자를 돕는 친절한 기술 파트너입니다.
+현재 프로젝트의 상태와 AI의 제안을 바탕으로, 이 기능을 추가하기 위한 설계도를 작성하세요.
 
-[기존 시스템]
-${notes.map(n => `Type: ${n.noteType} | Title: ${n.title}`).join('\n')}
+[AI의 제안 및 가설]
+- 타입: ${nudge.nudgeType}
+- 질문: ${nudge.question}
+- 가설: ${nudge.hypothesis}
+- 행동 제안: ${nudge.actionPrompt}
 
-기존 시스템과 중복되지 않으면서 자연스럽게 연결되는 새로운 Domain, Module, Logic을 설계하세요.
-응답 형식은 초기 블루프린트 생성과 동일한 JSON 스키마를 엄격히 따르세요.
+[현재 프로젝트 상태]
+${notes.map(n => `- ${n.title} (${n.noteType})`).join('\n')}
+
+[작성 지침 - 매우 중요]
+1. 비전공자도 이해할 수 있도록 아주 쉬운 일상 언어를 사용하세요.
+2. 기술 용어 대신 기능의 목적과 사용자 가치를 중심으로 설명하세요.
+3. 제목과 요약은 직관적이어야 하며, 이 기능이 추가되었을 때 서비스가 어떻게 좋아지는지 설명하세요.
+4. 구조는 반드시 domains -> modules -> logics 계층 구조여야 합니다.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "domains": [
+    {
+      "title": "...",
+      "summary": "...",
+      "modules": [
+        {
+          "title": "...",
+          "summary": "...",
+          "logics": [
+            {
+              "title": "...",
+              "summary": "..."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
 `;
 
   const responsePromise = ai.models.generateContent({
